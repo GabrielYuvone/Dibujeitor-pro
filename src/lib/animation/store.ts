@@ -68,6 +68,11 @@ interface AppState {
   // Selección temporal (texto activo)
   drawingBuffer: HTMLCanvasElement | null;
 
+  // Pilas de undo/redo
+  undoStack: HistoryEntry[];
+  redoStack: HistoryEntry[];
+  skipReloadOnHistory: boolean;
+
   // Acciones
   // Projects
   refreshProjects: () => Promise<void>;
@@ -177,8 +182,25 @@ interface AppState {
   toggleRulers: () => void;
   setDrawingBuffer: (c: HTMLCanvasElement | null) => void;
 
+  // Undo / Redo multinivel
+  pushHistory: (drawingId: ID, prevDataUrl: string, newDataUrl: string) => void;
+  undo: () => void;
+  redo: () => void;
+  canUndo: () => boolean;
+  canRedo: () => boolean;
+
   // Autosave
   triggerAutosave: () => Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// Tipo para entradas del stack de undo/redo
+// ---------------------------------------------------------------------------
+
+interface HistoryEntry {
+  drawingId: ID;
+  prevDataUrl: string;
+  newDataUrl: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +257,12 @@ export const useStore = create<AppState>((set, get) => ({
   isAutosaving: false,
   lastAutosaveAt: null,
   drawingBuffer: null,
+  // Pilas de undo/redo (no persistidas)
+  undoStack: [] as HistoryEntry[],
+  redoStack: [] as HistoryEntry[],
+  // Indicador para evitar que el motor de dibujo recargue el canvas
+  // cuando se hace undo/redo (la imagen cacheada ya está actualizada)
+  skipReloadOnHistory: false,
 
   // -------------------------------------------------------------------------
   // Projects
@@ -1027,6 +1055,88 @@ export const useStore = create<AppState>((set, get) => ({
   toggleSafeArea: () => set((s) => ({ showSafeArea: !s.showSafeArea })),
   toggleRulers: () => set((s) => ({ showRulers: !s.showRulers })),
   setDrawingBuffer: (c) => set({ drawingBuffer: c }),
+
+  // -------------------------------------------------------------------------
+  // Undo / Redo multinivel
+  // -------------------------------------------------------------------------
+
+  pushHistory: (drawingId, prevDataUrl, newDataUrl) => {
+    // Si prev y new son idénticos, no agregar entrada (no-op)
+    if (prevDataUrl === newDataUrl) return;
+    set((s) => ({
+      undoStack: [...s.undoStack, { drawingId, prevDataUrl, newDataUrl }].slice(-50),
+      redoStack: [], // Clear redo on new action
+    }));
+  },
+
+  undo: () => {
+    const s = get();
+    if (s.undoStack.length === 0) return;
+    const entry = s.undoStack[s.undoStack.length - 1];
+    // Restaurar el dataUrl anterior en el proyecto
+    set((st) => {
+      if (!st.project) return {};
+      if (!st.project.drawings[entry.drawingId]) return {};
+      const restored = {
+        ...st.project,
+        drawings: {
+          ...st.project.drawings,
+          [entry.drawingId]: {
+            ...st.project.drawings[entry.drawingId],
+            dataUrl: entry.prevDataUrl,
+            updatedAt: Date.now(),
+          },
+        },
+        dirty: true,
+        updatedAt: Date.now(),
+      };
+      return {
+        project: restored,
+        undoStack: st.undoStack.slice(0, -1),
+        redoStack: [...st.redoStack, entry],
+        skipReloadOnHistory: false,
+      };
+    });
+    // Pre-cachear la imagen restaurada
+    import("./useDrawingEngine").then(({ preloadImage }) => {
+      preloadImage(entry.drawingId, entry.prevDataUrl);
+    });
+  },
+
+  redo: () => {
+    const s = get();
+    if (s.redoStack.length === 0) return;
+    const entry = s.redoStack[s.redoStack.length - 1];
+    set((st) => {
+      if (!st.project) return {};
+      if (!st.project.drawings[entry.drawingId]) return {};
+      const restored = {
+        ...st.project,
+        drawings: {
+          ...st.project.drawings,
+          [entry.drawingId]: {
+            ...st.project.drawings[entry.drawingId],
+            dataUrl: entry.newDataUrl,
+            updatedAt: Date.now(),
+          },
+        },
+        dirty: true,
+        updatedAt: Date.now(),
+      };
+      return {
+        project: restored,
+        redoStack: st.redoStack.slice(0, -1),
+        undoStack: [...st.undoStack, entry],
+        skipReloadOnHistory: false,
+      };
+    });
+    import("./useDrawingEngine").then(({ preloadImage }) => {
+      preloadImage(entry.drawingId, entry.newDataUrl);
+    });
+  },
+
+  canUndo: () => get().undoStack.length > 0,
+  canRedo: () => get().redoStack.length > 0,
 
   triggerAutosave: async () => {
     const s = get();

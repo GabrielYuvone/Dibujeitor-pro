@@ -35,13 +35,13 @@ import { LayersPanel } from "./LayersPanel";
 import { Timeline } from "./Timeline";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { OnionSkinPanel } from "./OnionSkinPanel";
-import { ButtonsActionsPanel } from "./ButtonsActionsPanel";
+import { HelpPanel } from "./HelpPanel";
 import { AudioPanel } from "./AudioPanel";
 import { LibraryPanel } from "./LibraryPanel";
 import { ExportDialog } from "./ExportDialog";
 import { HelpDialog } from "./HelpDialog";
 
-type RightPanelTab = "properties" | "onion" | "buttons" | "audio" | "library";
+type RightPanelTab = "properties" | "onion" | "help" | "audio" | "library";
 
 export function EditorView() {
   const project = useStore((s) => s.project);
@@ -62,6 +62,10 @@ export function EditorView() {
   const [rightTab, setRightTab] = useState<RightPanelTab>("properties");
   const [exportOpen, setExportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  // Modo "lienzo a pantalla completa": oculta paneles laterales y timeline,
+  // dejando solo el canvas en grande. Se puede seguir dibujando y usando
+  // flechas para navegar frames. Toggle con F1.
+  const [fullscreenCanvas, setFullscreenCanvas] = useState(false);
 
   // Motor de reproducción
   usePlaybackEngine();
@@ -82,12 +86,25 @@ export function EditorView() {
       }
       if (!project) return;
 
-      // No interferir con Cmd/Ctrl
+      // Ctrl/Cmd + Z = undo, Ctrl/Cmd + Y o Ctrl/Cmd + Shift+Z = redo
       if (e.ctrlKey || e.metaKey) {
         if (e.key === "s") {
           e.preventDefault();
           saveCurrent();
+        } else if (e.key === "z" && !e.shiftKey) {
+          e.preventDefault();
+          useStore.getState().undo();
+        } else if ((e.key === "z" && e.shiftKey) || e.key === "y") {
+          e.preventDefault();
+          useStore.getState().redo();
         }
+        return;
+      }
+
+      // F1 = toggle canvas a pantalla completa
+      if (e.key === "F1") {
+        e.preventDefault();
+        setFullscreenCanvas((v) => !v);
         return;
       }
 
@@ -180,6 +197,12 @@ export function EditorView() {
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-background text-foreground">
       {/* Menubar */}
       <Menubar className="rounded-none border-b border-border h-10 shrink-0">
+        {/* Logo chiquito en el área de trabajo */}
+        <img
+          src="/logointro.png"
+          alt=""
+          className="h-7 w-auto ml-2 mr-1 object-contain opacity-80"
+        />
         <MenubarMenu>
           <MenubarTrigger>Archivo</MenubarTrigger>
           <MenubarContent>
@@ -198,11 +221,11 @@ export function EditorView() {
         <MenubarMenu>
           <MenubarTrigger>Edición</MenubarTrigger>
           <MenubarContent>
-            <MenubarItem disabled>
-              <Undo2 className="mr-2" size={14} /> Deshacer (próx.)
+            <MenubarItem onClick={() => useStore.getState().undo()}>
+              <Undo2 className="mr-2" size={14} /> Deshacer <span className="ml-auto text-[10px] opacity-60">Ctrl+Z</span>
             </MenubarItem>
-            <MenubarItem disabled>
-              <Redo2 className="mr-2" size={14} /> Rehacer (próx.)
+            <MenubarItem onClick={() => useStore.getState().redo()}>
+              <Redo2 className="mr-2" size={14} /> Rehacer <span className="ml-auto text-[10px] opacity-60">Ctrl+Y</span>
             </MenubarItem>
           </MenubarContent>
         </MenubarMenu>
@@ -214,6 +237,10 @@ export function EditorView() {
             </MenubarItem>
             <MenubarItem onClick={() => setViewMode("preview")}>
               <Eye className="mr-2" size={14} /> Modo previsualización
+            </MenubarItem>
+            <MenubarSeparator />
+            <MenubarItem onClick={() => setFullscreenCanvas((v) => !v)}>
+              <Maximize2 className="mr-2" size={14} /> {fullscreenCanvas ? "Salir pantalla completa" : "Lienzo a pantalla completa"} <span className="ml-auto text-[10px] opacity-60">F1</span>
             </MenubarItem>
             <MenubarSeparator />
             <MenubarItem onClick={toggleGrid}>
@@ -253,6 +280,33 @@ export function EditorView() {
       {/* Modo previsualización (pantalla completa) */}
       {viewMode === "preview" ? (
         <PreviewMode />
+      ) : fullscreenCanvas ? (
+        // Modo "lienzo a pantalla completa" (F1): solo canvas, sin paneles.
+        // Se puede seguir dibujando y usando flechas para navegar frames.
+        <div className="flex-1 relative bg-neutral-950">
+          <CanvasStage width={project.settings.width} height={project.settings.height} />
+          {/* Indicador flotante: cómo salir */}
+          <div className="absolute top-3 right-3 bg-background/80 backdrop-blur rounded px-3 py-1.5 text-xs border border-border">
+            <span className="text-muted-foreground">Pantalla completa · </span>
+            <kbd className="bg-muted px-1.5 rounded">F1</kbd>
+            <span className="text-muted-foreground"> para salir · </span>
+            <kbd className="bg-muted px-1.5 rounded">Espacio</kbd>
+            <span className="text-muted-foreground"> play · </span>
+            <kbd className="bg-muted px-1.5 rounded">→</kbd>
+            <kbd className="bg-muted px-1.5 rounded ml-1">←</kbd>
+            <span className="text-muted-foreground"> navegar</span>
+          </div>
+          {/* Botón play flotante */}
+          <Button
+            size="icon"
+            variant="default"
+            className="absolute bottom-4 right-4 rounded-full h-12 w-12 shadow-lg"
+            onClick={togglePlay}
+            title="Reproducir/Pausar (Espacio)"
+          >
+            {playback.playing ? <Pause size={18} /> : <Play size={18} />}
+          </Button>
+        </div>
       ) : (
         <>
           {/* Contenido principal */}
@@ -288,8 +342,8 @@ export function EditorView() {
                 <TabButton active={rightTab === "onion"} onClick={() => setRightTab("onion")}>
                   Onion
                 </TabButton>
-                <TabButton active={rightTab === "buttons"} onClick={() => setRightTab("buttons")}>
-                  Botones
+                <TabButton active={rightTab === "help"} onClick={() => setRightTab("help")}>
+                  Ayuda
                 </TabButton>
                 <TabButton active={rightTab === "audio"} onClick={() => setRightTab("audio")}>
                   Audio
@@ -305,7 +359,11 @@ export function EditorView() {
                     <OnionSkinPanel />
                   </div>
                 )}
-                {rightTab === "buttons" && <ButtonsActionsPanel />}
+                {rightTab === "help" && (
+                  <div className="h-full overflow-y-auto no-scrollbar">
+                    <HelpPanel />
+                  </div>
+                )}
                 {rightTab === "audio" && <AudioPanel />}
                 {rightTab === "library" && <LibraryPanel />}
               </div>

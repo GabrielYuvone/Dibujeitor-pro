@@ -222,8 +222,14 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     if (!layer || layer.type === "audio") return;
     const cell = findCellAtFrame(layer.cells, project.currentFrame);
     const drawingId = cell?.drawingId ?? null;
-    if (drawingId !== lastLoadedDrawingRef.current) {
-      lastLoadedDrawingRef.current = drawingId;
+    // IMPORTANTE: recargar también si cambió el dataUrl del drawing (por undo/redo),
+    // no solo si cambió el drawingId. Usamos updatedAt como cache key confiable:
+    // cambia con cada commit, undo y redo.
+    const drawing = drawingId ? project.drawings[drawingId] : null;
+    const updatedAt = drawing?.updatedAt ?? 0;
+    const cacheKey = `${drawingId}:${updatedAt}`;
+    if (cacheKey !== lastLoadedDrawingRef.current) {
+      lastLoadedDrawingRef.current = cacheKey;
       engine.loadDrawingIntoCanvas(drawingId);
     }
   }, [

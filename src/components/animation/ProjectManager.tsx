@@ -84,18 +84,17 @@ export function ProjectManager() {
   return (
     <div className="min-h-screen bg-background text-foreground overflow-auto">
       <div className="max-w-5xl mx-auto px-6 py-8">
-        {/* Header */}
-        <header className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <Film size={32} className="text-primary" />
-            <h1 className="text-3xl font-bold tracking-tight">
-              Animación Tradicional 2D
-            </h1>
-          </div>
-          <p className="text-muted-foreground">
+        {/* Header con logo grande */}
+        <header className="mb-8 flex flex-col items-center text-center">
+          <img
+            src="/logointro.png"
+            alt="Animación Tradicional 2D — Escuela de Animación"
+            className="max-w-2xl w-full h-auto mb-4 object-contain"
+            style={{ maxHeight: "320px" }}
+          />
+          <p className="text-muted-foreground max-w-2xl">
             Software de animación cuadro a cuadro para la escuela de animación.
-            Dibujo, capas, línea de tiempo, onion skin, audio y funciones interactivas
-            inspiradas en Flash clásico.
+            Dibujo, capas, línea de tiempo, onion skin, audio y exportación a MP4, WebM, GIF y secuencias PNG.
           </p>
         </header>
 

@@ -224,9 +224,16 @@ export function useDrawingEngine({
 
       drawingIdRef.current = drawingId;
 
-      // Intentar usar la imagen cacheada (síncrono)
+      // Intentar usar la imagen cacheada (síncrono) — pero SOLO si
+      // coincide con el dataUrl actual (caso undo/redo: el cache puede
+      // tener la versión previa que NO es la que queremos dibujar)
       const cached = getCachedImage(drawingId);
-      if (cached && cached.complete && cached.naturalWidth > 0) {
+      if (
+        cached &&
+        cached.complete &&
+        cached.naturalWidth > 0 &&
+        cached.dataset.dataUrl === drawing.dataUrl
+      ) {
         ctx.drawImage(cached, 0, 0, canvas.width, canvas.height);
         return;
       }
@@ -249,10 +256,22 @@ export function useDrawingEngine({
     const canvas = drawingCanvasRef.current;
     const drawingId = drawingIdRef.current;
     if (!canvas || !drawingId) return;
+
+    // Capturar el dataUrl ANTERIOR para el stack de undo
+    const proj = activeProjectRef.current;
+    const prevDrawing = proj?.drawings[drawingId];
+    const prevDataUrl = prevDrawing?.dataUrl ?? "";
+
     const dataUrl = canvas.toDataURL("image/png");
     // Pre-cachear la nueva versión
     await preloadImage(drawingId, dataUrl);
     await updateDrawing(drawingId, dataUrl);
+
+    // Registrar en el stack de undo (solo si cambió)
+    if (prevDataUrl && prevDataUrl !== dataUrl) {
+      useStore.getState().pushHistory(drawingId, prevDataUrl, dataUrl);
+    }
+
     lastDrawCommitRef.current = Date.now();
   }, [drawingCanvasRef, updateDrawing]);
 
