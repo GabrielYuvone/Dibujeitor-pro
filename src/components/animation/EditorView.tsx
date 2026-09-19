@@ -128,9 +128,9 @@ export function EditorView() {
         case "h":
           useStore.getState().setTool("pan");
           break;
-        case "z":
-          useStore.getState().setTool("zoom");
-          break;
+        // NOTA: Z es ahora un MODIFICADOR temporal (mantener apretado para zoom)
+        // y NO cambia el tool activo. Para hacer zoom: presionar Z, arrastrar hacia
+        // arriba/abajo o usar la rueda del mouse, soltar Z para volver a dibujar.
         case " ":
           e.preventDefault();
           togglePlay();

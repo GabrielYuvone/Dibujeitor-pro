@@ -424,7 +424,14 @@ export function useDrawingEngine({
       startPosRef.current = pt;
       lastPosRef.current = pt;
       smootherRef.current = createSmoother(activeBrushRef.current.smoothing);
-      pressureRef.current = e.pressure && e.pressure > 0 ? e.pressure : 1;
+      // FIX: cuando e.pressure es 0 o undefined (mouse, o pen apenas tocando la
+      // tableta), NO usar 1.0 (presión máxima) — usar minSizePressure para que
+      // el punto inicial sea pequeño y no aparezca un "punto grueso" al inicio.
+      // El trazo crecerá al recibir eventos de move con presión real.
+      const b0 = activeBrushRef.current;
+      pressureRef.current = b0.pressureSensitivity
+        ? (e.pressure && e.pressure > 0 ? e.pressure : b0.minSizePressure)
+        : 1;
 
       const canvas = drawingCanvasRef.current;
       if (!canvas) return;
@@ -523,7 +530,17 @@ export function useDrawingEngine({
       if (!ctx) return;
 
       const b = activeBrushRef.current;
-      pressureRef.current = e.pressure && e.pressure > 0 ? e.pressure : 1;
+      // FIX: si e.pressure es 0/undefined durante un trazo (tableta que envía
+      // eventos intermitentes con pressure=0), mantener la última presión conocida
+      // en lugar de saltar a 1.0 (que causaba puntos gruesos en medio del trazo).
+      if (b.pressureSensitivity) {
+        if (e.pressure && e.pressure > 0) {
+          pressureRef.current = e.pressure;
+        }
+        // si e.pressure es 0, dejamos pressureRef con su valor anterior (carry-over)
+      } else {
+        pressureRef.current = 1;
+      }
 
       if (tool === "pencil") {
         // Lápiz: dibujar dabs de mina a lo largo del trazo
