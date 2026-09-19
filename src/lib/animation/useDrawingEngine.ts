@@ -1,6 +1,10 @@
 // ============================================================================
-// useDrawingEngine.ts — Hook que orquesta el motor de dibujo del lienzo
+// useDrawingEngine.ts — Motor de dibujo y reproducción
 // ============================================================================
+// REFACTORIZADO: usa window listeners (no React pointer events) para
+// evitar el bug de "solo el primer punto" causado por awaits async en
+// handlePointerDown. También pre-cacha imágenes para render síncrono y
+// eliminar el parpadeo durante el playback.
 
 "use client";
 
@@ -13,20 +17,15 @@ import {
   floodFill,
   hexToRgb,
   screenToCanvas,
+  smoothPoint,
   strokeEllipse,
   strokeRectangle,
   strokeLine,
   type StrokeSmoother,
   dataUrlToImageData,
-  imageDataToDataUrl,
-  generateThumbnail,
 } from "./drawing";
 import type { ToolId } from "./types";
-import { genId } from "./utils";
-
-// ---------------------------------------------------------------------------
-// Hook de motor de dibujo
-// ---------------------------------------------------------------------------
+import { genId, totalFrames } from "./utils";
 
 interface DrawingEngineState {
   drawingCanvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -34,11 +33,50 @@ interface DrawingEngineState {
   containerRef: React.RefObject<HTMLDivElement | null>;
 }
 
+// ---------------------------------------------------------------------------
+// Cache global de imágenes: drawingId → Image (cargada)
+// ---------------------------------------------------------------------------
+
+const imageCache = new Map<string, HTMLImageElement>();
+
+/** Obtiene una Image ya cargada (o null si no está cargada). */
+export function getCachedImage(drawingId: string): HTMLImageElement | null {
+  return imageCache.get(drawingId) ?? null;
+}
+
+/** Carga (o recarga) una Image en la cache. */
+export function preloadImage(drawingId: string, dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve) => {
+    const existing = imageCache.get(drawingId);
+    if (existing && existing.dataset.dataUrl === dataUrl) {
+      resolve(existing);
+      return;
+    }
+    const img = new Image();
+    img.dataset.dataUrl = dataUrl;
+    img.onload = () => {
+      imageCache.set(drawingId, img);
+      resolve(img);
+    };
+    img.onerror = () => {
+      // Aún así guardamos para no reintentar infinitamente
+      imageCache.set(drawingId, img);
+      resolve(img);
+    };
+    img.src = dataUrl;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Hook principal
+// ---------------------------------------------------------------------------
+
 export function useDrawingEngine({
   drawingCanvasRef,
   overlayCanvasRef,
   containerRef,
 }: DrawingEngineState) {
+  // Suscripciones selectivas para que los callbacks no se recreen demasiado
   const project = useStore((s) => s.project);
   const brush = useStore((s) => s.brush);
   const currentTool = useStore((s) => s.currentTool);
@@ -46,120 +84,170 @@ export function useDrawingEngine({
   const ensureDrawing = useStore((s) => s.ensureDrawingForCell);
   const updateDrawing = useStore((s) => s.updateDrawing);
   const setTool = useStore((s) => s.setTool);
+  const gotoFrame = useStore((s) => s.gotoFrame);
+  const nextFrame = useStore((s) => s.nextFrame);
+  const prevFrame = useStore((s) => s.prevFrame);
+  const setPlaying = useStore((s) => s.setPlaying);
+  const setCanvasView = useStore((s) => s.setCanvasView);
+  const updateButton = useStore((s) => s.updateButton);
+  const setVariable = useStore((s) => s.setVariable);
 
-  // Estado de dibujo actual (no React, refs para no rerenderizar)
+  // Refs de estado de dibujo (no provocan re-render)
   const isDrawingRef = useRef(false);
   const lastPosRef = useRef<{ x: number; y: number } | null>(null);
   const startPosRef = useRef<{ x: number; y: number } | null>(null);
-  const smootherRef = useRef<StrokeSmoother>(createSmoother(brush.smoothing));
+  const smootherRef = useRef<StrokeSmoother>(createSmoother(0.35));
   const savedImageRef = useRef<ImageData | null>(null);
   const pressureRef = useRef<number>(1);
   const drawingIdRef = useRef<string | null>(null);
   const lastDrawCommitRef = useRef<number>(0);
+  const activeToolRef = useRef<ToolId>(currentTool);
+  const activeBrushRef = useRef(brush);
+  const activeCanvasViewRef = useRef(canvasView);
+  const activeProjectRef = useRef(project);
+  const isPanningRef = useRef(false);
+  const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  // Refs para selección (definidos al inicio del hook)
+  const selectionBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  const selectionImageRef = useRef<ImageData | null>(null);
+
+  // Mantener refs sincronizadas con el estado más reciente
+  useEffect(() => {
+    activeToolRef.current = currentTool;
+  }, [currentTool]);
+  useEffect(() => {
+    activeBrushRef.current = brush;
+    smootherRef.current = createSmoother(brush.smoothing);
+  }, [brush]);
+  useEffect(() => {
+    activeCanvasViewRef.current = canvasView;
+  }, [canvasView]);
+  useEffect(() => {
+    activeProjectRef.current = project;
+    // Pre-cachear imágenes de todos los drawings
+    if (project) {
+      for (const [id, d] of Object.entries(project.drawings)) {
+        preloadImage(id, d.dataUrl);
+      }
+    }
+  }, [project]);
 
   // ---------------------------------------------------------------------------
-  // Cargar el dibujo actual al lienzo
+  // Helpers
   // ---------------------------------------------------------------------------
+
+  const getCanvasPoint = useCallback(
+    (clientX: number, clientY: number): { x: number; y: number } | null => {
+      const container = containerRef.current;
+      const proj = activeProjectRef.current;
+      if (!container || !proj) return null;
+      const rect = container.getBoundingClientRect();
+      return screenToCanvas(
+        clientX,
+        clientY,
+        rect,
+        activeCanvasViewRef.current,
+        proj.settings.width,
+        proj.settings.height
+      );
+    },
+    [containerRef]
+  );
 
   const loadDrawingIntoCanvas = useCallback(
     async (drawingId: string | null) => {
       const canvas = drawingCanvasRef.current;
-      if (!canvas || !project) return;
+      const proj = activeProjectRef.current;
+      if (!canvas || !proj) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
+      // Limpiar SIEMPRE antes de cargar
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
 
       if (!drawingId) {
         drawingIdRef.current = null;
         return;
       }
 
-      const drawing = project.drawings[drawingId];
+      const drawing = proj.drawings[drawingId];
       if (!drawing) {
         drawingIdRef.current = null;
         return;
       }
 
       drawingIdRef.current = drawingId;
+
+      // Intentar usar la imagen cacheada (síncrono)
+      const cached = getCachedImage(drawingId);
+      if (cached && cached.complete && cached.naturalWidth > 0) {
+        ctx.drawImage(cached, 0, 0, canvas.width, canvas.height);
+        return;
+      }
+
+      // Fallback async (y cachear para la próxima)
       try {
-        const imgData = await dataUrlToImageData(
-          drawing.dataUrl,
-          canvas.width,
-          canvas.height
-        );
-        ctx.putImageData(imgData, 0, 0);
+        await preloadImage(drawingId, drawing.dataUrl);
+        const img = getCachedImage(drawingId);
+        if (img && img.complete) {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        }
       } catch (e) {
         console.error("Error cargando dibujo:", e);
       }
     },
-    [project, drawingCanvasRef]
+    [drawingCanvasRef]
   );
-
-  // ---------------------------------------------------------------------------
-  // Guardar el dibujo actual al store
-  // ---------------------------------------------------------------------------
 
   const commitDrawing = useCallback(async () => {
     const canvas = drawingCanvasRef.current;
     const drawingId = drawingIdRef.current;
-    if (!canvas || !drawingId || !project) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
+    if (!canvas || !drawingId) return;
     const dataUrl = canvas.toDataURL("image/png");
+    // Pre-cachear la nueva versión
+    await preloadImage(drawingId, dataUrl);
     await updateDrawing(drawingId, dataUrl);
     lastDrawCommitRef.current = Date.now();
-  }, [drawingCanvasRef, project, updateDrawing]);
+  }, [drawingCanvasRef, updateDrawing]);
 
   // ---------------------------------------------------------------------------
-  // Reset del smoother cuando cambia el smoothing
+  // Punto de entrada del pointer down (síncrono lo máximo posible)
   // ---------------------------------------------------------------------------
-
-  useEffect(() => {
-    smootherRef.current = createSmoother(brush.smoothing);
-  }, [brush.smoothing]);
-
-  // ---------------------------------------------------------------------------
-  // Pointer events: dibujar
-  // ---------------------------------------------------------------------------
-
-  const getCanvasPoint = useCallback(
-    (e: PointerEvent | React.PointerEvent | WheelEvent) => {
-      const canvas = drawingCanvasRef.current;
-      const container = containerRef.current;
-      if (!canvas || !container || !project) return null;
-      const rect = container.getBoundingClientRect();
-      return screenToCanvas(
-        e.clientX,
-        e.clientY,
-        rect,
-        canvasView,
-        project.settings.width,
-        project.settings.height
-      );
-    },
-    [drawingCanvasRef, containerRef, canvasView, project]
-  );
 
   const handlePointerDown = useCallback(
     async (e: React.PointerEvent) => {
-      if (!project) return;
-      const layer = project.layers.find((l) => l.id === project.currentLayerId);
+      const proj = activeProjectRef.current;
+      if (!proj) return;
+      const layer = proj.layers.find((l) => l.id === proj.currentLayerId);
       if (!layer || layer.locked || !layer.visible || layer.type === "audio") return;
 
-      const tool = currentTool;
+      const tool = activeToolRef.current;
 
-      // Pan y zoom son modos de navegación, no dibujan
+      // --- Pan: síncrono ---
       if (tool === "pan") {
-        isDrawingRef.current = true;
-        startPosRef.current = { x: e.clientX, y: e.clientY };
-        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        isPanningRef.current = true;
+        isDrawingRef.current = false;
+        panStartRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          panX: activeCanvasViewRef.current.panX,
+          panY: activeCanvasViewRef.current.panY,
+        };
         return;
       }
 
+      // --- Zoom: síncrono (toggle zoom x2 / x1) ---
+      if (tool === "zoom") {
+        const cur = activeCanvasViewRef.current.zoom;
+        setCanvasView({ zoom: cur > 1 ? 1 : 2 });
+        return;
+      }
+
+      // --- Cuentagotas: síncrono ---
       if (tool === "eyedropper") {
-        const pt = getCanvasPoint(e);
+        const pt = getCanvasPoint(e.clientX, e.clientY);
         if (!pt) return;
         const canvas = drawingCanvasRef.current;
         if (!canvas) return;
@@ -168,58 +256,128 @@ export function useDrawingEngine({
         const x = Math.floor(pt.x);
         const y = Math.floor(pt.y);
         if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return;
-        const data = ctx.getImageData(x, y, 1, 1).data;
-        const hex = `#${[data[0], data[1], data[2]]
-          .map((v) => v.toString(16).padStart(2, "0"))
-          .join("")}`;
+        // Combinar todas las capas visibles para muestrar el color
+        let r = 255, g = 255, b = 255;
+        try {
+          const data = ctx.getImageData(x, y, 1, 1).data;
+          r = data[0]; g = data[1]; b = data[2];
+        } catch (_) { /* ignore */ }
+        const hex = `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
         useStore.getState().setBrush({ color: hex });
         setTool("pencil");
         return;
       }
 
-      // Para herramientas de dibujo necesitamos un drawing activo
+      // --- Herramientas que requieren un drawing activo ---
+      // Para herramientas que sólo necesitan "leer" (selection, transform),
+      // no creamos un drawing nuevo automáticamente
+      if (tool === "selection" || tool === "transform") {
+        const pt = getCanvasPoint(e.clientX, e.clientY);
+        if (!pt) return;
+        startPosRef.current = pt;
+        isDrawingRef.current = true;
+        // Selection se maneja en handleMove (rectángulo sobre overlay)
+        return;
+      }
+
+      // Crear/obtener drawing para herramientas de dibujo
       const cell = layer.cells.find(
         (c) =>
-          project.currentFrame >= c.startFrame &&
-          project.currentFrame < c.startFrame + c.duration
+          proj.currentFrame >= c.startFrame &&
+          proj.currentFrame < c.startFrame + c.duration
       );
 
       let drawingId = cell?.drawingId ?? null;
-      if (!drawingId && (tool === "pencil" || tool === "brush" || tool === "eraser" || tool === "line" || tool === "rectangle" || tool === "ellipse" || tool === "fill")) {
-        try {
-          drawingId = await ensureDrawing(layer.id, project.currentFrame);
-        } catch (err) {
-          console.error("No se pudo crear drawing:", err);
-          return;
-        }
+      if (!drawingId) {
+        // Crear drawing vacío inmediatamente (síncrono)
+        const newId = genId("draw");
+        const now = Date.now();
+        const emptyCanvas = document.createElement("canvas");
+        emptyCanvas.width = proj.settings.width;
+        emptyCanvas.height = proj.settings.height;
+        const emptyDataUrl = emptyCanvas.toDataURL("image/png");
+
+        // Actualizar store
+        useStore.setState((s) => {
+          if (!s.project) return {};
+          // Buscar celda actual o crear nueva
+          const layers = s.project.layers.map((l) => {
+            if (l.id !== layer.id) return l;
+            const cells = [...l.cells];
+            const existing = cells.find(
+              (c) =>
+                s.project!.currentFrame >= c.startFrame &&
+                s.project!.currentFrame < c.startFrame + c.duration
+            );
+            if (existing) {
+              const idx = cells.indexOf(existing);
+              cells[idx] = { ...existing, drawingId: newId };
+            } else {
+              cells.push({
+                id: genId("cell"),
+                drawingId: newId,
+                startFrame: s.project.currentFrame,
+                duration: 1,
+              });
+              cells.sort((a, b) => a.startFrame - b.startFrame);
+            }
+            return { ...l, cells };
+          });
+          return {
+            project: {
+              ...s.project,
+              layers,
+              drawings: {
+                ...s.project.drawings,
+                [newId]: {
+                  id: newId,
+                  name: `Drawing ${Object.keys(s.project.drawings).length + 1}`,
+                  dataUrl: emptyDataUrl,
+                  width: s.project.settings.width,
+                  height: s.project.settings.height,
+                  createdAt: now,
+                  updatedAt: now,
+                },
+              },
+              dirty: true,
+              updatedAt: now,
+            },
+          };
+        });
+
+        // Pre-cachear el drawing vacío
+        await preloadImage(newId, emptyDataUrl);
+        drawingId = newId;
       }
+
       if (!drawingId) return;
+
+      // Cargar el drawing en el canvas activo (síncrono si está cacheado)
       await loadDrawingIntoCanvas(drawingId);
 
-      const pt = getCanvasPoint(e);
+      const pt = getCanvasPoint(e.clientX, e.clientY);
       if (!pt) return;
 
+      // IMPORTANTE: setear el estado de dibujo INMEDIATAMENTE
       isDrawingRef.current = true;
       startPosRef.current = pt;
       lastPosRef.current = pt;
-      smootherRef.current = createSmoother(brush.smoothing);
       pressureRef.current = e.pressure && e.pressure > 0 ? e.pressure : 1;
 
       const canvas = drawingCanvasRef.current;
-      const overlay = overlayCanvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
-      // Para primitivas (línea, rect, elipse) guardamos el estado actual
+      // Para primitivas, guardar estado actual
       if (tool === "line" || tool === "rectangle" || tool === "ellipse") {
         savedImageRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
       }
 
-      // Para el bote de tinta, ejecutar inmediatamente
+      // Bote de tinta: ejecutar y commitear inmediatamente
       if (tool === "fill") {
-        const color = hexToRgb(brush.color);
-        color.a = Math.round(brush.opacity * 255);
+        const color = hexToRgb(activeBrushRef.current.color);
+        color.a = Math.round(activeBrushRef.current.opacity * 255);
         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         floodFill(imgData, pt.x, pt.y, color);
         ctx.putImageData(imgData, 0, 0);
@@ -228,91 +386,78 @@ export function useDrawingEngine({
         return;
       }
 
-      // Para trazo: configurar contexto
-      const overlayCtx = overlay?.getContext("2d") ?? null;
+      // Lápiz, pincel, goma: trazar punto inicial
+      const b = activeBrushRef.current;
       if (tool === "pencil" || tool === "brush") {
-        configureStroke(ctx, brush, pressureRef.current);
-        // Punto inicial
+        configureStroke(ctx, b, pressureRef.current);
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, Math.max(0.5, ctx.lineWidth / 2), 0, Math.PI * 2);
-        ctx.fillStyle = brush.color;
+        ctx.fillStyle = b.color;
         ctx.fill();
       } else if (tool === "eraser") {
-        configureEraser(ctx, brush, pressureRef.current);
+        configureEraser(ctx, b, pressureRef.current);
       }
-
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
     },
-    [
-      project,
-      currentTool,
-      brush,
-      canvasView,
-      ensureDrawing,
-      loadDrawingIntoCanvas,
-      commitDrawing,
-      getCanvasPoint,
-      drawingCanvasRef,
-      overlayCanvasRef,
-      containerRef,
-      setTool,
-    ]
+    [getCanvasPoint, loadDrawingIntoCanvas, commitDrawing, setTool, setCanvasView, drawingCanvasRef]
   );
 
-  const handlePointerMove = useCallback(
-    (e: React.PointerEvent) => {
-      if (!project) return;
-      const layer = project.layers.find((l) => l.id === project.currentLayerId);
-      if (!layer || layer.locked || !layer.visible) return;
+  // ---------------------------------------------------------------------------
+  // Move y Up: window listeners (bulletproof)
+  // ---------------------------------------------------------------------------
 
-      const tool = currentTool;
-
+  const handleMove = useCallback(
+    (e: PointerEvent) => {
       // Pan
-      if (tool === "pan" && isDrawingRef.current && startPosRef.current) {
-        const dx = e.clientX - startPosRef.current.x;
-        const dy = e.clientY - startPosRef.current.y;
-        startPosRef.current = { x: e.clientX, y: e.clientY };
-        useStore.getState().setCanvasView({
-          panX: canvasView.panX + dx,
-          panY: canvasView.panY + dy,
+      if (isPanningRef.current && panStartRef.current) {
+        const dx = e.clientX - panStartRef.current.x;
+        const dy = e.clientY - panStartRef.current.y;
+        setCanvasView({
+          panX: panStartRef.current.panX + dx,
+          panY: panStartRef.current.panY + dy,
         });
         return;
       }
 
       if (!isDrawingRef.current) return;
 
-      const pt = getCanvasPoint(e);
-      if (!pt || !lastPosRef.current || !startPosRef.current) return;
+      const proj = activeProjectRef.current;
+      if (!proj) return;
+      const layer = proj.layers.find((l) => l.id === proj.currentLayerId);
+      if (!layer || layer.locked || !layer.visible) return;
+
+      const tool = activeToolRef.current;
+      const pt = getCanvasPoint(e.clientX, e.clientY);
+      if (!pt || !startPosRef.current) return;
 
       const canvas = drawingCanvasRef.current;
-      const overlay = overlayCanvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
+      const b = activeBrushRef.current;
       pressureRef.current = e.pressure && e.pressure > 0 ? e.pressure : 1;
 
       if (tool === "pencil" || tool === "brush" || tool === "eraser") {
         if (tool === "pencil" || tool === "brush") {
-          configureStroke(ctx, brush, pressureRef.current);
+          configureStroke(ctx, b, pressureRef.current);
         } else {
-          configureEraser(ctx, brush, pressureRef.current);
+          configureEraser(ctx, b, pressureRef.current);
         }
         const smoothed = smoothPoint(smootherRef.current, pt.x, pt.y);
-        // Continuamos el trazo desde lastPosRef
-        ctx.beginPath();
+        // Continuamos el trazo desde lastPos
         if (lastPosRef.current) {
+          ctx.beginPath();
           ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
+          ctx.lineTo(smoothed.x, smoothed.y);
+          ctx.stroke();
         }
-        ctx.lineTo(smoothed.x, smoothed.y);
-        ctx.stroke();
         lastPosRef.current = smoothed;
       } else if (tool === "line" || tool === "rectangle" || tool === "ellipse") {
-        // Restaurar estado guardado y dibujar primitiva en overlay
+        // Restaurar estado guardado y dibujar primitiva
         if (savedImageRef.current) {
           ctx.putImageData(savedImageRef.current, 0, 0);
         }
-        configureStroke(ctx, brush, pressureRef.current);
+        configureStroke(ctx, b, pressureRef.current);
         if (tool === "line") {
           strokeLine(ctx, startPosRef.current.x, startPosRef.current.y, pt.x, pt.y);
         } else if (tool === "rectangle") {
@@ -320,54 +465,144 @@ export function useDrawingEngine({
         } else if (tool === "ellipse") {
           strokeEllipse(ctx, startPosRef.current.x, startPosRef.current.y, pt.x, pt.y);
         }
+      } else if (tool === "selection") {
+        // Dibujar rectángulo de selección en overlay
+        const overlay = overlayCanvasRef.current;
+        if (!overlay) return;
+        const octx = overlay.getContext("2d");
+        if (!octx) return;
+        octx.clearRect(0, 0, overlay.width, overlay.height);
+        octx.strokeStyle = "#4dabf7";
+        octx.lineWidth = 1;
+        octx.setLineDash([4, 4]);
+        const x = Math.min(startPosRef.current.x, pt.x);
+        const y = Math.min(startPosRef.current.y, pt.y);
+        const w = Math.abs(pt.x - startPosRef.current.x);
+        const h = Math.abs(pt.y - startPosRef.current.y);
+        octx.strokeRect(x, y, w, h);
+        octx.fillStyle = "rgba(77, 171, 247, 0.15)";
+        octx.fillRect(x, y, w, h);
+        octx.setLineDash([]);
       }
     },
-    [
-      project,
-      currentTool,
-      brush,
-      canvasView,
-      getCanvasPoint,
-      drawingCanvasRef,
-      overlayCanvasRef,
-    ]
+    [getCanvasPoint, setCanvasView, drawingCanvasRef, overlayCanvasRef]
   );
 
-  const handlePointerUp = useCallback(
-    async (e: React.PointerEvent) => {
-      if (!project) return;
-
-      if (currentTool === "pan") {
-        isDrawingRef.current = false;
-        startPosRef.current = null;
+  const handleUp = useCallback(
+    async (e: PointerEvent) => {
+      // Pan fin
+      if (isPanningRef.current) {
+        isPanningRef.current = false;
+        panStartRef.current = null;
         return;
       }
 
       if (!isDrawingRef.current) return;
       isDrawingRef.current = false;
+
+      const tool = activeToolRef.current;
+
+      // Para selection: guardar selección y limpiar overlay
+      if (tool === "selection") {
+        const overlay = overlayCanvasRef.current;
+        if (overlay) {
+          const octx = overlay.getContext("2d");
+          octx?.clearRect(0, 0, overlay.width, overlay.height);
+        }
+        // Calcular bounds
+        if (startPosRef.current && lastPosRef.current) {
+          const x = Math.min(startPosRef.current.x, lastPosRef.current.x);
+          const y = Math.min(startPosRef.current.y, lastPosRef.current.y);
+          const w = Math.abs(lastPosRef.current.x - startPosRef.current.x);
+          const h = Math.abs(lastPosRef.current.y - startPosRef.current.y);
+          if (w > 2 && h > 2) {
+            selectionBoundsRef.current = { x, y, width: w, height: h };
+            // Extraer pixels seleccionados
+            const canvas = drawingCanvasRef.current;
+            if (canvas) {
+              const ctx = canvas.getContext("2d");
+              if (ctx) {
+                try {
+                  selectionImageRef.current = ctx.getImageData(x, y, w, h);
+                  // Limpiar la región seleccionada (cortar)
+                  ctx.clearRect(x, y, w, h);
+                  await commitDrawing();
+                } catch (err) {
+                  console.error(err);
+                }
+              }
+            }
+          }
+        }
+        startPosRef.current = null;
+        lastPosRef.current = null;
+        return;
+      }
+
       startPosRef.current = null;
       lastPosRef.current = null;
       savedImageRef.current = null;
 
       await commitDrawing();
     },
-    [project, currentTool, commitDrawing]
+    [overlayCanvasRef, drawingCanvasRef, commitDrawing]
   );
+
+  // ---------------------------------------------------------------------------
+  // Wheel para zoom
+  // ---------------------------------------------------------------------------
 
   const handleWheel = useCallback(
     (e: WheelEvent) => {
-      if (!project) return;
+      const proj = activeProjectRef.current;
+      if (!proj) return;
       e.preventDefault();
       const delta = -e.deltaY * 0.001;
-      const newZoom = Math.max(0.05, Math.min(20, canvasView.zoom * (1 + delta * 2)));
-      useStore.getState().setCanvasView({ zoom: newZoom });
+      const cur = activeCanvasViewRef.current.zoom;
+      const newZoom = Math.max(0.05, Math.min(20, cur * (1 + delta * 2)));
+      setCanvasView({ zoom: newZoom });
     },
-    [project, canvasView]
+    [setCanvasView]
   );
 
-  // Throttle de guardado durante dibujo (cada 1s mientras se dibuja)
-  // (commitDrawing se llama al soltar el puntero, pero para trazos largos
-  // conviene hacer commit periódico)
+  // ---------------------------------------------------------------------------
+  // Helpers para selección (definidos antes del return)
+  // ---------------------------------------------------------------------------
+
+  const clearSelection = useCallback(() => {
+    selectionBoundsRef.current = null;
+    selectionImageRef.current = null;
+  }, []);
+
+  const pasteSelection = useCallback(async () => {
+    const canvas = drawingCanvasRef.current;
+    const sel = selectionImageRef.current;
+    const bounds = selectionBoundsRef.current;
+    if (!canvas || !sel || !bounds) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.putImageData(sel, bounds.x, bounds.y);
+    await commitDrawing();
+  }, [drawingCanvasRef, commitDrawing]);
+
+  // ---------------------------------------------------------------------------
+  // Window listeners para move/up (bulletproof — no dependen de React)
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    const move = (e: PointerEvent) => handleMove(e);
+    const up = (e: PointerEvent) => handleUp(e);
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+  }, [handleMove, handleUp]);
+
+  // Commit periódico mientras se dibuja
   useEffect(() => {
     const interval = setInterval(() => {
       if (isDrawingRef.current && Date.now() - lastDrawCommitRef.current > 1000) {
@@ -379,16 +614,18 @@ export function useDrawingEngine({
 
   return {
     handlePointerDown,
-    handlePointerMove,
-    handlePointerUp,
     handleWheel,
     loadDrawingIntoCanvas,
     commitDrawing,
+    selectionBoundsRef,
+    selectionImageRef,
+    clearSelection,
+    pasteSelection,
   };
 }
 
 // ---------------------------------------------------------------------------
-// Hook de reproducción (motor de animación)
+// Hook de reproducción (motor de animación) — sin flicker
 // ---------------------------------------------------------------------------
 
 export function usePlaybackEngine() {
@@ -401,16 +638,13 @@ export function usePlaybackEngine() {
   const lastTimeRef = useRef<number>(0);
   const frameAccumRef = useRef<number>(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioStartedAtRef = useRef<number>(0);
 
-  // Loop de reproducción
   useEffect(() => {
     if (!project || !playback.playing) {
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      // detener audio
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
@@ -420,13 +654,9 @@ export function usePlaybackEngine() {
 
     const fps = project.settings.fps;
     const speed = playback.speed;
-    const total = Math.max(
-      1,
-      totalFramesOfProject(project),
-      ...(playback.rangeEnd ? [playback.rangeEnd] : [])
-    );
+    const total = totalFrames(project.layers);
     const rangeStart = playback.rangeStart ?? 0;
-    const rangeEnd = playback.rangeEnd ?? Math.max(1, totalFramesOfProject(project));
+    const rangeEnd = playback.rangeEnd ?? Math.max(1, total);
 
     lastTimeRef.current = performance.now();
     frameAccumRef.current = 0;
@@ -440,11 +670,9 @@ export function usePlaybackEngine() {
       while (frameAccumRef.current >= 1) {
         frameAccumRef.current -= 1;
         const next = project.currentFrame + 1;
-
         if (next >= rangeEnd) {
           if (playback.looping) {
             gotoFrame(rangeStart);
-            // Reiniciar audio si existe
             if (audioRef.current) {
               audioRef.current.currentTime = 0;
             }
@@ -467,19 +695,16 @@ export function usePlaybackEngine() {
     };
   }, [project, playback, setPlaying, gotoFrame]);
 
-  // Reproducir audio en el frame actual cuando playing
+  // Audio sincronizado
   useEffect(() => {
     if (!project || !playback.playing) return;
     const fps = project.settings.fps;
     const currentFrame = project.currentFrame;
-    // Buscar audio clip que contenga el frame actual
     for (const clip of Object.values(project.audioClips)) {
       const start = clip.startFrame;
       const end = start + Math.floor(clip.duration * fps);
       if (currentFrame >= start && currentFrame <= end && !clip.muted) {
-        // Si ya está reproduciendo, no reiniciar
         if (audioRef.current && audioRef.current.dataset.id === clip.id) {
-          // sincronizar
           const expectedTime = (currentFrame - start) / fps;
           if (Math.abs(audioRef.current.currentTime - expectedTime) > 0.2) {
             audioRef.current.currentTime = expectedTime;
@@ -487,7 +712,6 @@ export function usePlaybackEngine() {
           if (audioRef.current.paused) audioRef.current.play().catch(() => {});
           return;
         }
-        // Crear nuevo elemento
         if (audioRef.current) {
           audioRef.current.pause();
         }
@@ -500,21 +724,9 @@ export function usePlaybackEngine() {
         return;
       }
     }
-    // No hay clip para este frame, pausar
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
   }, [project, playback.playing]);
-}
-
-function totalFramesOfProject(project: { layers: { cells: { startFrame: number; duration: number }[] }[] }): number {
-  let max = 1;
-  for (const layer of project.layers) {
-    for (const cell of layer.cells) {
-      const end = cell.startFrame + cell.duration;
-      if (end > max) max = end;
-    }
-  }
-  return max;
 }

@@ -2,13 +2,9 @@
 
 import React, { useEffect, useRef, useCallback } from "react";
 import { useStore, getCurrentLayer } from "@/lib/animation/store";
-import { useDrawingEngine } from "@/lib/animation/useDrawingEngine";
-import {
-  dataUrlToImageData,
-  withAlpha,
-} from "@/lib/animation/drawing";
+import { useDrawingEngine, getCachedImage, preloadImage } from "@/lib/animation/useDrawingEngine";
 import { findCellAtFrame } from "@/lib/animation/utils";
-import type { Drawing, Layer } from "@/lib/animation/types";
+import { executeActions, evalCondition } from "@/lib/animation/actions";
 
 interface CanvasStageProps {
   width: number;
@@ -16,19 +12,18 @@ interface CanvasStageProps {
 }
 
 /**
- * Lienzo principal de dibujo.
+ * Lienzo principal. Renderiza capas con imágenes cacheadas (síncrono)
+ * para evitar parpadeo durante el playback.
  *
- * Compone varios elementos:
- *  - fondo (checkerboard o color del proyecto)
- *  - capas visibles con su drawing activo
- *  - capa de dibujo activa (editable, sobre la que se trabaja)
- *  - overlay (preview de primitivas)
+ * - backgroundRef: fondo del proyecto + grid + safe area
+ * - compositedRef: composición final de TODAS las capas visibles (síncrono)
+ * - drawingCanvasRef: canvas editable donde el usuario dibuja
+ * - overlayCanvasRef: preview de primitivas y selección
  *
- * El dibujo se realiza sobre un canvas "drawingCanvas" que contiene
- * el bitmap del drawing actual. Al soltar el puntero se persiste al store.
- *
- * La vista (zoom, pan, rotación) se aplica con CSS transform al contenedor
- * de los canvases, manteniendo precisión sub-pixel.
+ * Durante la edición, el drawingCanvas muestra el drawing activo y está
+ * sobre el compositedRef. Durante el playback, ocultamos el drawingCanvas
+ * (que es editable y se resetea) y dejamos solo el compositedRef, que se
+ * actualiza en una sola operación atómica (sin flicker).
  */
 export function CanvasStage({ width, height }: CanvasStageProps) {
   const project = useStore((s) => s.project);
@@ -37,13 +32,14 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   const showGrid = useStore((s) => s.showGrid);
   const showSafeArea = useStore((s) => s.showSafeArea);
   const viewMode = useStore((s) => s.viewMode);
+  const playback = useStore((s) => s.playback);
   const resetCanvasView = useStore((s) => s.resetCanvasView);
 
   const drawingCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const backgroundRef = useRef<HTMLCanvasElement | null>(null);
-  const displayRef = useRef<HTMLDivElement | null>(null);
+  const compositedRef = useRef<HTMLCanvasElement | null>(null);
   const lastLoadedDrawingRef = useRef<string | null>(null);
 
   const engine = useDrawingEngine({
@@ -52,41 +48,22 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     containerRef,
   });
 
-  // Crear canvas de capas
-  const layerCanvasesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  // El modo "composición" se usa cuando NO estamos editando o cuando
+  // se está reproduciendo. En este modo, el drawingCanvas se oculta.
+  const isCompositing = viewMode === "preview" || playback.playing;
 
-  // Ajustar el tamaño del canvas de dibujo según el proyecto
-  useEffect(() => {
-    const c = drawingCanvasRef.current;
-    if (c && (c.width !== width || c.height !== height)) {
-      c.width = width;
-      c.height = height;
-    }
-    const o = overlayCanvasRef.current;
-    if (o && (o.width !== width || o.height !== height)) {
-      o.width = width;
-      o.height = height;
-    }
-    const b = backgroundRef.current;
-    if (b && (b.width !== width || b.height !== height)) {
-      b.width = width;
-      b.height = height;
-      drawBackground();
-    }
-  }, [width, height]);
+  // ---------------------------------------------------------------------------
+  // Pintar fondo
+  // ---------------------------------------------------------------------------
 
-  // Pintar fondo del canvas de fondo (color del proyecto + guía)
   const drawBackground = useCallback(() => {
     const c = backgroundRef.current;
     if (!c || !project) return;
     const ctx = c.getContext("2d")!;
     ctx.clearRect(0, 0, c.width, c.height);
-    // Fondo del proyecto
     ctx.fillStyle = project.settings.bgColor;
     ctx.fillRect(0, 0, c.width, c.height);
-    // Checkerboard si el color de fondo es transparente
     if (project.settings.bgColor === "transparent" || project.settings.bgColor === "rgba(0,0,0,0)") {
-      // pattern
       const size = 12;
       for (let y = 0; y < c.height; y += size) {
         for (let x = 0; x < c.width; x += size) {
@@ -96,23 +73,19 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
         }
       }
     }
-    // Safe area
     if (showSafeArea) {
       ctx.strokeStyle = "#ff0000";
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
-      // Acción segura (90% del área)
       const sx = c.width * 0.05;
       const sy = c.height * 0.05;
       ctx.strokeRect(sx, sy, c.width - sx * 2, c.height - sy * 2);
-      // Título seguro (80%)
       const tx = c.width * 0.1;
       const ty = c.height * 0.1;
       ctx.strokeStyle = "#00ff00";
       ctx.strokeRect(tx, ty, c.width - tx * 2, c.height - ty * 2);
       ctx.setLineDash([]);
     }
-    // Grid
     if (showGrid) {
       ctx.strokeStyle = "rgba(255,255,255,0.15)";
       ctx.lineWidth = 1;
@@ -129,7 +102,6 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
         ctx.lineTo(c.width, y);
         ctx.stroke();
       }
-      // Línea central
       ctx.strokeStyle = "rgba(255,255,255,0.4)";
       ctx.beginPath();
       ctx.moveTo(c.width / 2, 0);
@@ -140,143 +112,103 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     }
   }, [project, showSafeArea, showGrid]);
 
-  useEffect(() => {
-    drawBackground();
-  }, [drawBackground]);
+  // ---------------------------------------------------------------------------
+  // Componer todas las capas en un solo canvas (síncrono con imágenes cacheadas)
+  // ---------------------------------------------------------------------------
 
-  // Redibujar capas visibles (no activa) cuando cambia el frame o el proyecto
-  const renderVisibleLayers = useCallback(async () => {
-    if (!project) return;
-    const display = displayRef.current;
-    if (!display) return;
-    // Limpiar canvas anteriores (lazy)
-    for (const [, canvas] of layerCanvasesRef.current) {
-      const ctx = canvas.getContext("2d");
-      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+  const compositeAll = useCallback(() => {
+    const c = compositedRef.current;
+    if (!c || !project) return;
+    const ctx = c.getContext("2d")!;
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+
+    // Onion skin primero (debajo de las capas reales)
+    if (onion.enabled && viewMode === "edit" && !playback.playing) {
+      const currentLayer = getCurrentLayer(project);
+      if (currentLayer && currentLayer.type !== "audio") {
+        drawOnionIntoCanvas(ctx, project, currentLayer, onion);
+      }
     }
 
-    // Orden de capas (de abajo a arriba). En project.layers, la primera
-    // capa está en el fondo.
-    const currentLayer = getCurrentLayer(project);
+    // Capas (de abajo hacia arriba — la primera capa está en el fondo)
     for (const layer of project.layers) {
       if (!layer.visible || layer.type === "audio") continue;
-      if (layer.id === project.currentLayerId) continue; // se dibuja en el canvas activo
-      if (layer.locked) continue; // las capas bloqueadas no se ven en edición
       const cell = findCellAtFrame(layer.cells, project.currentFrame);
       if (!cell || !cell.drawingId) continue;
       const drawing = project.drawings[cell.drawingId];
       if (!drawing) continue;
 
-      // Obtener canvas existente o crear
-      let canvas = layerCanvasesRef.current.get(layer.id);
-      if (!canvas) {
-        canvas = document.createElement("canvas");
-        canvas.width = project.settings.width;
-        canvas.height = project.settings.height;
-        canvas.style.position = "absolute";
-        canvas.style.left = "0";
-        canvas.style.top = "0";
-        canvas.style.pointerEvents = "none";
-        layerCanvasesRef.current.set(layer.id, canvas);
-        display.appendChild(canvas);
+      const img = getCachedImage(cell.drawingId);
+      if (img && img.complete && img.naturalWidth > 0) {
+        ctx.globalAlpha = layer.opacity;
+        ctx.drawImage(img, 0, 0, c.width, c.height);
       }
-      const ctx = canvas.getContext("2d")!;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.globalAlpha = layer.opacity;
-      const img = new Image();
-      img.src = drawing.dataUrl;
-      await new Promise((r) => {
-        img.onload = () => r(null);
-        img.onerror = () => r(null);
-      });
-      ctx.drawImage(img, 0, 0);
-      ctx.globalAlpha = 1;
+      // Si no está cacheada, no dibujamos aquí (se cargará en el efecto siguiente)
     }
+    ctx.globalAlpha = 1;
 
-    // Limpiar canvas no usados
-    const usedIds = new Set(project.layers.map((l) => l.id));
-    for (const [id, canvas] of layerCanvasesRef.current) {
-      if (!usedIds.has(id)) {
-        canvas.remove();
-        layerCanvasesRef.current.delete(id);
+    // Botones interactivos en modo preview
+    if (viewMode === "preview") {
+      for (const btn of project.buttons) {
+        if (!btn.visible) continue;
+        ctx.fillStyle = btn.color;
+        ctx.fillRect(btn.x, btn.y, btn.width, btn.height);
+        ctx.strokeStyle = "rgba(0,0,0,0.3)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(btn.x, btn.y, btn.width, btn.height);
+        ctx.fillStyle = "#fff";
+        ctx.font = "14px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(btn.label, btn.x + btn.width / 2, btn.y + btn.height / 2);
       }
     }
-  }, [project]);
+  }, [project, onion, viewMode, playback.playing]);
 
-  // Render onion skin: dibujar capas anteriores y posteriores
-  const renderOnionSkin = useCallback(async () => {
-    // Onion skin se implementa como un canvas overlay que se dibuja
-    // antes del overlay normal. Para mantenerlo simple, lo haremos
-    // parte del display normal.
-    // Implementación simplificada: dibujar en el overlay de onion skin
-    // (reutilizamos overlayCanvasRef con doble uso)
-    if (!project) return;
-    const overlay = overlayCanvasRef.current;
-    if (!overlay) return;
-    const ctx = overlay.getContext("2d")!;
-    ctx.clearRect(0, 0, overlay.width, overlay.height);
+  // ---------------------------------------------------------------------------
+  // Efecto: ajustar tamaños de canvas
+  // ---------------------------------------------------------------------------
 
-    if (!onion.enabled || viewMode !== "edit") return;
-
-    const currentLayer = getCurrentLayer(project);
-    if (!currentLayer || currentLayer.type === "audio") return;
-
-    // Función para dibujar onion de un frame
-    const drawOnionFrame = async (frame: number, opacity: number, color: string, isNext: boolean) => {
-      const cell = findCellAtFrame(currentLayer.cells, frame);
-      if (!cell || !cell.drawingId) return;
-      const drawing = project.drawings[cell.drawingId];
-      if (!drawing) return;
-      const img = new Image();
-      img.src = drawing.dataUrl;
-      await new Promise((r) => {
-        img.onload = () => r(null);
-        img.onerror = () => r(null);
-      });
-      // Tint: dibujamos la imagen con un tinte del color
-      // Método: dibujar imagen normal, luego multiplicar con color
-      ctx.save();
-      ctx.globalAlpha = opacity;
-      // Dibujar imagen normal
-      ctx.globalCompositeOperation = "source-over";
-      ctx.drawImage(img, 0, 0);
-      // Aplicar tinte con multiply
-      ctx.globalCompositeOperation = "source-in";
-      ctx.fillStyle = color;
-      ctx.fillRect(0, 0, overlay.width, overlay.height);
-      ctx.restore();
-    };
-
-    // Dibujar frames anteriores
-    if (!onion.onlyPrevious) {
-      for (let i = 1; i <= onion.prevFrames; i++) {
-        const frame = project.currentFrame - i;
-        if (frame < 0) break;
-        const op = onion.prevOpacity * (1 - (i - 1) / onion.prevFrames);
-        await drawOnionFrame(frame, op, onion.prevColor, false);
-      }
-    } else {
-      // Solo el anterior
-      const frame = project.currentFrame - 1;
-      if (frame >= 0) {
-        await drawOnionFrame(frame, onion.prevOpacity, onion.prevColor, false);
+  useEffect(() => {
+    for (const ref of [drawingCanvasRef, overlayCanvasRef, backgroundRef, compositedRef]) {
+      const c = ref.current;
+      if (c && (c.width !== width || c.height !== height)) {
+        c.width = width;
+        c.height = height;
       }
     }
+    drawBackground();
+  }, [width, height, drawBackground]);
 
-    // Dibujar frames siguientes (sólo si no es onlyPrevious)
-    if (!onion.onlyPrevious) {
-      for (let i = 1; i <= onion.nextFrames; i++) {
-        const frame = project.currentFrame + i;
-        const op = onion.nextOpacity * (1 - (i - 1) / onion.nextFrames);
-        await drawOnionFrame(frame, op, onion.nextColor, true);
-      }
-    }
-  }, [project, onion, viewMode]);
+  useEffect(() => {
+    drawBackground();
+  }, [drawBackground]);
 
-  // Al cambiar de frame, cargar el dibujo de la capa actual
+  // ---------------------------------------------------------------------------
+  // Efecto: pre-cachear todas las imágenes del proyecto
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
     if (!project) return;
-    if (viewMode === "preview") return; // en preview no se edita
+    const all = Object.values(project.drawings);
+    for (const d of all) {
+      preloadImage(d.id, d.dataUrl);
+    }
+  }, [project?.drawings]);
+
+  // ---------------------------------------------------------------------------
+  // Efecto: cargar drawing activo + componer (en edit mode)
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!project) return;
+    // Componer siempre
+    compositeAll();
+
+    // En edición, también cargar el drawing activo
+    if (viewMode !== "edit" || playback.playing) return;
     const layer = getCurrentLayer(project);
     if (!layer || layer.type === "audio") return;
     const cell = findCellAtFrame(layer.cells, project.currentFrame);
@@ -285,29 +217,27 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
       lastLoadedDrawingRef.current = drawingId;
       engine.loadDrawingIntoCanvas(drawingId);
     }
-    // Render visible layers y onion skin
-    renderVisibleLayers();
-    renderOnionSkin();
   }, [
     project?.currentFrame,
     project?.currentLayerId,
     project?.drawings,
     project?.layers,
     viewMode,
+    playback.playing,
+    onion,
+    compositeAll,
     engine,
-    renderVisibleLayers,
-    renderOnionSkin,
   ]);
 
+  // Recomponer al cambiar el proyecto (cualquier cambio)
   useEffect(() => {
-    renderOnionSkin();
-  }, [onion, renderOnionSkin]);
+    compositeAll();
+  }, [compositeAll]);
 
-  useEffect(() => {
-    renderVisibleLayers();
-  }, [renderVisibleLayers]);
+  // ---------------------------------------------------------------------------
+  // Transform del contenedor
+  // ---------------------------------------------------------------------------
 
-  // Estilo del contenedor: aplicar transform
   const transform = `translate(-50%, -50%) translate(${canvasView.panX}px, ${canvasView.panY}px) scale(${canvasView.zoom}) rotate(${canvasView.rotation}deg)`;
 
   if (!project) return null;
@@ -322,13 +252,13 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
             ? "grab"
             : useStore.getState().currentTool === "eyedropper"
               ? "copy"
-              : "crosshair",
+              : useStore.getState().currentTool === "selection" || useStore.getState().currentTool === "transform"
+                ? "default"
+                : "crosshair",
       }}
       onWheel={(e) => engine.handleWheel(e as unknown as WheelEvent)}
     >
-      {/* Contenedor con transformación */}
       <div
-        ref={displayRef}
         className="absolute"
         style={{
           left: "50%",
@@ -340,11 +270,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           boxShadow: "0 0 0 1px rgba(255,255,255,0.2), 0 10px 30px rgba(0,0,0,0.5)",
         }}
         onPointerDown={engine.handlePointerDown}
-        onPointerMove={engine.handlePointerMove}
-        onPointerUp={engine.handlePointerUp}
-        onPointerLeave={engine.handlePointerUp}
       >
-        {/* Fondo */}
         <canvas
           ref={backgroundRef}
           width={width}
@@ -352,19 +278,23 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           className="absolute inset-0 pointer-events-none"
           style={{ width, height }}
         />
-
-        {/* Canvas de capas (no activas) - inyectado dinámicamente */}
-
-        {/* Canvas de dibujo activo */}
+        {/* Composited (todas las capas + onion skin + botones preview) */}
+        <canvas
+          ref={compositedRef}
+          width={width}
+          height={height}
+          className="absolute inset-0 pointer-events-none"
+          style={{ width, height, visibility: isCompositing ? "visible" : "hidden" }}
+        />
+        {/* Drawing canvas (editable, solo en edit mode) */}
         <canvas
           ref={drawingCanvasRef}
           width={width}
           height={height}
           className="absolute inset-0 canvas-surface"
-          style={{ width, height }}
+          style={{ width, height, visibility: isCompositing ? "hidden" : "visible" }}
         />
-
-        {/* Overlay (onion skin + primitivas en preview) */}
+        {/* Overlay (selección, primitivas preview) */}
         <canvas
           ref={overlayCanvasRef}
           width={width}
@@ -372,21 +302,11 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           className="absolute inset-0 pointer-events-none"
           style={{ width, height }}
         />
-
-        {/* Botones interactivos (en preview) */}
-        {viewMode === "preview" &&
-          project.buttons.map((btn) =>
-            btn.visible ? (
-              <InteractiveButtonView key={btn.id} buttonId={btn.id} />
-            ) : null
-          )}
       </div>
 
-      {/* Indicadores de zoom y botones flotantes */}
+      {/* Indicadores */}
       <div className="absolute bottom-2 left-2 flex items-center gap-2 bg-background/80 px-2 py-1 rounded text-xs backdrop-blur">
-        <span>
-          {Math.round(canvasView.zoom * 100)}%
-        </span>
+        <span>{Math.round(canvasView.zoom * 100)}%</span>
         <span className="text-muted-foreground">|</span>
         <span>{width}×{height}</span>
         <button
@@ -401,7 +321,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Botón interactivo (vista de preview)
+// Botón interactivo (modo preview — sobre el composited)
 // ---------------------------------------------------------------------------
 
 function InteractiveButtonView({ buttonId }: { buttonId: string }) {
@@ -413,13 +333,10 @@ function InteractiveButtonView({ buttonId }: { buttonId: string }) {
   if (!button || !project) return null;
 
   const handleClick = () => {
-    // Ejecutar handlers con evento "click"
     const handlers = button.handlers.filter((h) => h.event === "click");
     handlers.forEach((h) => {
-      // Verificar condición
-      // Evaluar acciones
       const ctx = {
-        project: project,
+        project,
         setProjectState: () => {},
         gotoFrame: (frame: number) => useStore.getState().gotoFrame(frame),
         togglePlay: () => useStore.getState().togglePlay(),
@@ -439,10 +356,8 @@ function InteractiveButtonView({ buttonId }: { buttonId: string }) {
           useStore.getState().setVariable(name, value),
         stop: () => {},
       };
-      import("@/lib/animation/actions").then(({ executeActions, evalCondition }) => {
-        if (!evalCondition(h.condition, project.variables)) return;
-        executeActions(h.actions, ctx);
-      });
+      if (!evalCondition(h.condition, project.variables)) return;
+      executeActions(h.actions, ctx);
     });
   };
 
@@ -458,20 +373,56 @@ function InteractiveButtonView({ buttonId }: { buttonId: string }) {
         pointerEvents: "auto",
       }}
       onClick={handleClick}
-      onMouseDown={() => {
-        // press event
-      }}
-      onMouseUp={() => {
-        // release event
-      }}
-      onMouseEnter={() => {
-        // mouseenter event
-      }}
-      onMouseLeave={() => {
-        // mouseleave event
-      }}
     >
       {button.label}
     </button>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Dibujar onion skin en un contexto (síncrono con imágenes cacheadas)
+// ---------------------------------------------------------------------------
+
+function drawOnionIntoCanvas(
+  ctx: CanvasRenderingContext2D,
+  project: NonNullable<ReturnType<typeof useStore.getState>["project"]>,
+  currentLayer: ReturnType<typeof getCurrentLayer>,
+  onion: ReturnType<typeof useStore.getState>["onion"]
+) {
+  if (!currentLayer || !onion) return;
+  const drawOne = (frame: number, opacity: number, color: string) => {
+    const cell = findCellAtFrame(currentLayer.cells, frame);
+    if (!cell || !cell.drawingId) return;
+    const img = getCachedImage(cell.drawingId);
+    if (!img || !img.complete) return;
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+    // Tinte
+    ctx.globalCompositeOperation = "source-in";
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.restore();
+  };
+
+  if (!onion.onlyPrevious) {
+    for (let i = 1; i <= onion.prevFrames; i++) {
+      const frame = project.currentFrame - i;
+      if (frame < 0) break;
+      const op = onion.prevOpacity * (1 - (i - 1) / onion.prevFrames);
+      drawOne(frame, op, onion.prevColor);
+    }
+  } else {
+    const frame = project.currentFrame - 1;
+    if (frame >= 0) drawOne(frame, onion.prevOpacity, onion.prevColor);
+  }
+
+  if (!onion.onlyPrevious) {
+    for (let i = 1; i <= onion.nextFrames; i++) {
+      const frame = project.currentFrame + i;
+      const op = onion.nextOpacity * (1 - (i - 1) / onion.nextFrames);
+      drawOne(frame, op, onion.nextColor);
+    }
+  }
 }

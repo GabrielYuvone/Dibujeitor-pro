@@ -12,6 +12,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { downloadBlob, exportAnimation } from "@/lib/animation/export";
+import { exportMp4, exportWebM } from "@/lib/animation/videoExport";
 import { totalFrames } from "@/lib/animation/utils";
 import type { ExportFormat } from "@/lib/animation/types";
 import { Loader2, Download } from "lucide-react";
@@ -22,6 +23,8 @@ interface ExportDialogProps {
 }
 
 const FORMAT_LABELS: { id: ExportFormat; label: string; description: string }[] = [
+  { id: "mp4", label: "MP4 (video)", description: "Video MP4 con H.264 — se codifica con ffmpeg.wasm (~25MB descarga única del core)" },
+  { id: "webm", label: "WebM (video)", description: "Video WebM con VP9 — rápido, sin dependencias externas" },
   { id: "gif", label: "GIF animado", description: "Animación completa en un solo archivo .gif" },
   { id: "png_sequence", label: "Secuencia PNG", description: "Una imagen PNG por frame (alta calidad)" },
   { id: "jpeg_sequence", label: "Secuencia JPEG", description: "Una imagen JPG por frame (más liviana)" },
@@ -35,10 +38,10 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
   const setExportOptions = useStore((s) => s.setExportOptions);
 
   const [progress, setProgress] = useState(0);
+  const [stage, setStage] = useState<"rendering" | "encoding" | "">("");
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Calcular rango por defecto al abrir
   useEffect(() => {
     if (open && project) {
       const total = totalFrames(project.layers);
@@ -64,10 +67,28 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
     setExporting(true);
     setError(null);
     setProgress(0);
+    setStage("");
+
     try {
-      const results = await exportAnimation(project, exportOptions, (p) => setProgress(p));
-      for (const { blob, filename } of results) {
-        downloadBlob(blob, filename);
+      const baseName = project.name.replace(/[^a-zA-Z0-9_-]/g, "_");
+
+      if (exportOptions.format === "mp4") {
+        setStage("rendering");
+        const blob = await exportMp4(project, exportOptions, (p, s) => {
+          setStage(s);
+          setProgress(p);
+        });
+        downloadBlob(blob, `${baseName}.mp4`);
+      } else if (exportOptions.format === "webm") {
+        const blob = await exportWebM(project, exportOptions, (p) => {
+          setProgress(p);
+        });
+        downloadBlob(blob, `${baseName}.webm`);
+      } else {
+        const results = await exportAnimation(project, exportOptions, (p) => setProgress(p));
+        for (const { blob, filename } of results) {
+          downloadBlob(blob, filename);
+        }
       }
       onOpenChange(false);
     } catch (e) {
@@ -75,12 +96,15 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
       setError((e as Error).message ?? "Error al exportar");
     } finally {
       setExporting(false);
+      setStage("");
     }
   };
 
+  const isVideoFormat = exportOptions.format === "mp4" || exportOptions.format === "webm";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Exportar animación</DialogTitle>
           <DialogDescription>
@@ -194,10 +218,26 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
             </div>
           )}
 
+          {/* Audio para video */}
+          {isVideoFormat && (
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={exportOptions.includeAudio}
+                onChange={(e) =>
+                  setExportOptions({ includeAudio: e.target.checked })
+                }
+              />
+              Incluir audio (si hay pistas)
+            </label>
+          )}
+
           {/* Color de fondo */}
           {(exportOptions.format === "gif" ||
             exportOptions.format === "jpeg" ||
-            exportOptions.format === "jpeg_sequence") && (
+            exportOptions.format === "jpeg_sequence" ||
+            exportOptions.format === "mp4" ||
+            exportOptions.format === "webm") && (
             <div>
               <label className="text-xs font-semibold uppercase text-muted-foreground mb-1.5 block">
                 Color de fondo
@@ -247,8 +287,13 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
           {/* Progreso */}
           {exporting && (
             <div>
-              <div className="text-xs mb-1 text-muted-foreground">
-                Exportando… {Math.round(progress * 100)}%
+              <div className="text-xs mb-1 text-muted-foreground flex justify-between">
+                <span>
+                  {stage === "rendering" && "Renderizando frames…"}
+                  {stage === "encoding" && "Codificando video…"}
+                  {!stage && "Exportando…"}
+                </span>
+                <span>{Math.round(progress * 100)}%</span>
               </div>
               <div className="w-full h-2 bg-muted rounded overflow-hidden">
                 <div
@@ -256,6 +301,11 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
                   style={{ width: `${progress * 100}%` }}
                 />
               </div>
+              {exportOptions.format === "mp4" && (
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  La primera exportación MP4 descarga ffmpeg-core (~25MB). Las siguientes son rápidas.
+                </p>
+              )}
             </div>
           )}
 
@@ -265,13 +315,18 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
             </div>
           )}
 
-          {/* Nota MP4 */}
-          {exportOptions.format === "gif" && (
+          {/* Nota informativa */}
+          {exportOptions.format === "mp4" && !exporting && (
             <div className="text-xs text-muted-foreground p-2 bg-muted/30 rounded">
-              <strong>Nota técnica:</strong> La exportación a MP4 no está incluida en esta versión
-              por limitaciones del navegador (requiere codificador de video WASM, ~10MB adicional).
-              Como alternativa, podés usar la secuencia PNG e importarla a un editor como DaVinci
-              Resolve, Shotcut o Adobe Premiere para generar MP4 con control total del códec.
+              <strong>MP4 con ffmpeg.wasm:</strong> La primera vez se descarga el core de ffmpeg
+              (~25MB) que se cachea para futuras exportaciones. Esto permite generar video MP4
+              con H.264 + audio AAC directamente en el navegador, sin servidor.
+            </div>
+          )}
+          {exportOptions.format === "webm" && !exporting && (
+            <div className="text-xs text-muted-foreground p-2 bg-muted/30 rounded">
+              <strong>WebM con MediaRecorder:</strong> Codificación nativa del navegador (VP9 + Opus).
+              Más rápido que MP4 pero el formato WebM no es tan universal como MP4.
             </div>
           )}
         </div>

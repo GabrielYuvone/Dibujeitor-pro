@@ -305,7 +305,7 @@ export interface CanvasView {
 // Exportación
 // ---------------------------------------------------------------------------
 
-export type ExportFormat = "png" | "jpeg" | "gif" | "png_sequence" | "jpeg_sequence";
+export type ExportFormat = "png" | "jpeg" | "gif" | "png_sequence" | "jpeg_sequence" | "mp4" | "webm";
 
 export interface ExportOptions {
   format: ExportFormat;
