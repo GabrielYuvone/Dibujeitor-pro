@@ -49,7 +49,10 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   });
 
   // El modo "composición" se usa cuando NO estamos editando o cuando
-  // se está reproduciendo. En este modo, el drawingCanvas se oculta.
+  // se está reproduciendo. En este modo, el drawingCanvas se oculta
+  // (porque se está reseteando entre frames) y solo se ve el composited.
+  // En edit mode, AMBOS canvases están visibles: el composited (con onion
+  // skin + capas no-activas) DEBAJO del drawing canvas (la capa activa).
   const isCompositing = viewMode === "preview" || playback.playing;
 
   // ---------------------------------------------------------------------------
@@ -124,8 +127,13 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
 
-    // Onion skin primero (debajo de las capas reales)
-    if (onion.enabled && viewMode === "edit" && !playback.playing) {
+    // En edit mode (sin playback), la capa activa se muestra en el drawing
+    // canvas (arriba). La excluimos del composited para no duplicar.
+    const excludeActiveLayer = viewMode === "edit" && !playback.playing;
+    const activeLayerId = project.currentLayerId;
+
+    // Onion skin primero (debajo de las capas reales) — solo en edit mode
+    if (onion.enabled && excludeActiveLayer) {
       const currentLayer = getCurrentLayer(project);
       if (currentLayer && currentLayer.type !== "audio") {
         drawOnionIntoCanvas(ctx, project, currentLayer, onion);
@@ -135,6 +143,8 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     // Capas (de abajo hacia arriba — la primera capa está en el fondo)
     for (const layer of project.layers) {
       if (!layer.visible || layer.type === "audio") continue;
+      // En edit mode, excluir la capa activa del composited
+      if (excludeActiveLayer && layer.id === activeLayerId) continue;
       const cell = findCellAtFrame(layer.cells, project.currentFrame);
       if (!cell || !cell.drawingId) continue;
       const drawing = project.drawings[cell.drawingId];
@@ -145,7 +155,6 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
         ctx.globalAlpha = layer.opacity;
         ctx.drawImage(img, 0, 0, c.width, c.height);
       }
-      // Si no está cacheada, no dibujamos aquí (se cargará en el efecto siguiente)
     }
     ctx.globalAlpha = 1;
 
@@ -278,15 +287,16 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           className="absolute inset-0 pointer-events-none"
           style={{ width, height }}
         />
-        {/* Composited (todas las capas + onion skin + botones preview) */}
+        {/* Composited (onion skin + capas no-activas en edit; todo en preview) */}
+        {/* SIEMPRE visible: en edit mode queda DEBAJO del drawing canvas */}
         <canvas
           ref={compositedRef}
           width={width}
           height={height}
           className="absolute inset-0 pointer-events-none"
-          style={{ width, height, visibility: isCompositing ? "visible" : "hidden" }}
+          style={{ width, height }}
         />
-        {/* Drawing canvas (editable, solo en edit mode) */}
+        {/* Drawing canvas (editable, solo en edit mode sin playback) */}
         <canvas
           ref={drawingCanvasRef}
           width={width}

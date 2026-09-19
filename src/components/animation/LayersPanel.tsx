@@ -59,41 +59,45 @@ export function LayersPanel() {
         <div className="flex gap-1">
           <Button
             size="sm"
-            variant="ghost"
-            className="h-7 w-7 p-0"
+            variant="default"
+            className="h-7 px-2 text-xs"
             title="Nueva capa de dibujo"
             onClick={() => addLayer("draw")}
           >
-            <Plus size={14} />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 w-7 p-0"
-            title="Nueva capa de referencia"
-            onClick={() => addLayer("reference")}
-          >
-            <ImageIcon size={14} />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 w-7 p-0"
-            title="Nueva capa de fondo"
-            onClick={() => addLayer("background")}
-          >
-            <SquareIcon size={14} />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 w-7 p-0"
-            title="Nueva capa de audio"
-            onClick={() => addLayer("audio")}
-          >
-            <Music size={14} />
+            <Plus size={12} /> Dibujo
           </Button>
         </div>
+      </div>
+
+      {/* Fila de botones para tipos específicos de capa */}
+      <div className="grid grid-cols-3 gap-1 p-1.5 border-b border-border bg-muted/20">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-[10px]"
+          title="Nueva capa de referencia"
+          onClick={() => addLayer("reference")}
+        >
+          <ImageIcon size={11} className="mr-1" /> Ref.
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-[10px]"
+          title="Nueva capa de fondo"
+          onClick={() => addLayer("background")}
+        >
+          <SquareIcon size={11} className="mr-1" /> Fondo
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-[10px]"
+          title="Nueva capa de audio"
+          onClick={() => addLayer("audio")}
+        >
+          <Music size={11} className="mr-1" /> Audio
+        </Button>
       </div>
 
       <div className="flex-1 overflow-y-auto no-scrollbar">

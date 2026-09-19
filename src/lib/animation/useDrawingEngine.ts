@@ -12,8 +12,10 @@ import { useCallback, useEffect, useRef } from "react";
 import { useStore } from "./store";
 import {
   configureEraser,
+  configurePencil,
   configureStroke,
   createSmoother,
+  drawPencilDab,
   floodFill,
   hexToRgb,
   screenToCanvas,
@@ -107,9 +109,42 @@ export function useDrawingEngine({
   const activeProjectRef = useRef(project);
   const isPanningRef = useRef(false);
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  // Modificador Z: mientras se mantiene Z apretado, el wheel y el drag
+  // hacen zoom/pan en lugar de dibujar. Es un atajo temporal.
+  const zModifierRef = useRef(false);
   // Refs para selección (definidos al inicio del hook)
   const selectionBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const selectionImageRef = useRef<ImageData | null>(null);
+
+  // Listener para el modificador Z (keydown/keyup)
+  useEffect(() => {
+    const onDown = (e: KeyboardEvent) => {
+      // No interferir con inputs
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
+        return;
+      }
+      if (e.key === "z" || e.key === "Z") {
+        zModifierRef.current = true;
+      }
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.key === "z" || e.key === "Z") {
+        zModifierRef.current = false;
+        // Si estábamos paneando con Z, soltar
+        if (isPanningRef.current) {
+          isPanningRef.current = false;
+          panStartRef.current = null;
+        }
+      }
+    };
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+    };
+  }, []);
 
   // Mantener refs sincronizadas con el estado más reciente
   useEffect(() => {
@@ -225,6 +260,19 @@ export function useDrawingEngine({
 
       const tool = activeToolRef.current;
 
+      // --- MODIFICADOR Z: si Z está apretado, comportarse como pan (zoom con wheel) ---
+      if (zModifierRef.current) {
+        isPanningRef.current = true;
+        isDrawingRef.current = false;
+        panStartRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          panX: activeCanvasViewRef.current.panX,
+          panY: activeCanvasViewRef.current.panY,
+        };
+        return;
+      }
+
       // --- Pan: síncrono ---
       if (tool === "pan") {
         isPanningRef.current = true;
@@ -256,7 +304,6 @@ export function useDrawingEngine({
         const x = Math.floor(pt.x);
         const y = Math.floor(pt.y);
         if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return;
-        // Combinar todas las capas visibles para muestrar el color
         let r = 255, g = 255, b = 255;
         try {
           const data = ctx.getImageData(x, y, 1, 1).data;
@@ -274,9 +321,11 @@ export function useDrawingEngine({
       if (tool === "selection" || tool === "transform") {
         const pt = getCanvasPoint(e.clientX, e.clientY);
         if (!pt) return;
+        // RESETEAR smoother y lastPos para evitar "raya" del trazo anterior
+        smootherRef.current = createSmoother(activeBrushRef.current.smoothing);
         startPosRef.current = pt;
+        lastPosRef.current = pt; // IMPORTANTE: necesario para que handleUp calcule bounds
         isDrawingRef.current = true;
-        // Selection se maneja en handleMove (rectángulo sobre overlay)
         return;
       }
 
@@ -359,9 +408,12 @@ export function useDrawingEngine({
       if (!pt) return;
 
       // IMPORTANTE: setear el estado de dibujo INMEDIATAMENTE
+      // y RESETEAR el smoother para que no quede con la posición del
+      // trazo anterior (causaba el bug "raya al comenzar en cualquier dirección")
       isDrawingRef.current = true;
       startPosRef.current = pt;
       lastPosRef.current = pt;
+      smootherRef.current = createSmoother(activeBrushRef.current.smoothing);
       pressureRef.current = e.pressure && e.pressure > 0 ? e.pressure : 1;
 
       const canvas = drawingCanvasRef.current;
@@ -388,7 +440,15 @@ export function useDrawingEngine({
 
       // Lápiz, pincel, goma: trazar punto inicial
       const b = activeBrushRef.current;
-      if (tool === "pencil" || tool === "brush") {
+      if (tool === "pencil") {
+        // Lápiz: textura de mina de grafito
+        configurePencil(ctx, b, pressureRef.current);
+        const size = b.pressureSensitivity
+          ? b.size * Math.max(b.minSizePressure, pressureRef.current)
+          : b.size;
+        drawPencilDab(ctx, pt.x, pt.y, size, b.opacity * 0.7);
+      } else if (tool === "brush") {
+        // Pincel: trazo suave y redondo
         configureStroke(ctx, b, pressureRef.current);
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, Math.max(0.5, ctx.lineWidth / 2), 0, Math.PI * 2);
@@ -407,7 +467,7 @@ export function useDrawingEngine({
 
   const handleMove = useCallback(
     (e: PointerEvent) => {
-      // Pan
+      // Pan (incluye modificador Z apretado)
       if (isPanningRef.current && panStartRef.current) {
         const dx = e.clientX - panStartRef.current.x;
         const dy = e.clientY - panStartRef.current.y;
@@ -437,8 +497,30 @@ export function useDrawingEngine({
       const b = activeBrushRef.current;
       pressureRef.current = e.pressure && e.pressure > 0 ? e.pressure : 1;
 
-      if (tool === "pencil" || tool === "brush" || tool === "eraser") {
-        if (tool === "pencil" || tool === "brush") {
+      if (tool === "pencil") {
+        // Lápiz: dibujar dabs de mina a lo largo del trazo
+        configurePencil(ctx, b, pressureRef.current);
+        const size = b.pressureSensitivity
+          ? b.size * Math.max(b.minSizePressure, pressureRef.current)
+          : b.size;
+        const smoothed = smoothPoint(smootherRef.current, pt.x, pt.y);
+        // Dibujar dabs entre lastPos y smoothed para crear un trazo continuo
+        if (lastPosRef.current) {
+          const dx = smoothed.x - lastPosRef.current.x;
+          const dy = smoothed.y - lastPosRef.current.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const step = Math.max(1, size * 0.15);
+          const steps = Math.max(1, Math.floor(dist / step));
+          for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const x = lastPosRef.current.x + dx * t;
+            const y = lastPosRef.current.y + dy * t;
+            drawPencilDab(ctx, x, y, size, b.opacity * 0.5);
+          }
+        }
+        lastPosRef.current = smoothed;
+      } else if (tool === "brush" || tool === "eraser") {
+        if (tool === "brush") {
           configureStroke(ctx, b, pressureRef.current);
         } else {
           configureEraser(ctx, b, pressureRef.current);
@@ -466,6 +548,9 @@ export function useDrawingEngine({
           strokeEllipse(ctx, startPosRef.current.x, startPosRef.current.y, pt.x, pt.y);
         }
       } else if (tool === "selection") {
+        // IMPORTANTE: actualizar lastPosRef.current con la posición actual
+        // para que handleUp pueda calcular los bounds correctamente
+        lastPosRef.current = pt;
         // Dibujar rectángulo de selección en overlay
         const overlay = overlayCanvasRef.current;
         if (!overlay) return;

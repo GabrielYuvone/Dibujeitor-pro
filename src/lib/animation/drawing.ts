@@ -102,6 +102,64 @@ export function configureEraser(
   ctx.globalAlpha = brush.eraserMode === "soft" ? brush.opacity * 0.5 : 1;
 }
 
+/**
+ * Configura el contexto para el LÁPIZ.
+ *
+ * El lápiz tiene una textura tipo "mina de lápiz":
+ * - Menor opacidad (0.65x) — parece grafito
+ * - LineCap cuadrado (trazos más definidos)
+ * - LineWidth más fino (0.6x del tamaño) — línea precisa
+ * - LineJoin mitre
+ *
+ * Esto produce un trazo más seco y definido, distinto del pincel
+ * que es redondo y suave.
+ */
+export function configurePencil(
+  ctx: CanvasRenderingContext2D,
+  brush: BrushSettings,
+  pressure = 1
+) {
+  const size = brush.pressureSensitivity
+    ? brush.size * Math.max(brush.minSizePressure, pressure)
+    : brush.size;
+  // Lápiz: 0.6x del tamaño, opacidad reducida
+  ctx.lineWidth = Math.max(0.5, size * 0.6);
+  ctx.strokeStyle = brush.color;
+  ctx.fillStyle = brush.color;
+  ctx.lineCap = "square";
+  ctx.lineJoin = "miter";
+  ctx.globalAlpha = brush.opacity * 0.7;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+}
+
+/**
+ * Dibuja una textura de mina de lápiz alrededor de un punto.
+ * Compone varios puntos pequeños con jitter para simular
+ * la aspereza del grafito sobre papel.
+ */
+export function drawPencilDab(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number,
+  alpha: number
+) {
+  const count = Math.max(2, Math.floor(size * 0.4));
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const r = Math.random() * size * 0.5;
+    const px = x + Math.cos(angle) * r;
+    const py = y + Math.sin(angle) * r;
+    const s = size * (0.15 + Math.random() * 0.2);
+    ctx.globalAlpha = alpha * (0.3 + Math.random() * 0.4);
+    ctx.beginPath();
+    ctx.arc(px, py, Math.max(0.3, s), 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Conversión de coordenadas de pantalla a coordenadas del lienzo
 // ---------------------------------------------------------------------------
@@ -110,7 +168,18 @@ export function configureEraser(
  * Transforma coordenadas de pantalla en coordenadas de bitmap del lienzo
  * teniendo en cuenta zoom, pan y rotación.
  *
- * Nota: la rotación se aplica alrededor del centro del lienzo.
+ * La transform CSS aplicada al canvas es:
+ *   translate(-50%, -50%) translate(panX, panY) scale(zoom) rotate(rotation)
+ *
+ * Lo que significa: dado un punto P en coords locales del canvas (relativo a su
+ * centro), su posición en pantalla es:
+ *   screenPos = containerCenter + (panX, panY) + zoom * R(rotation) * P
+ *
+ * Para invertir (screen → canvas local):
+ *   1. offset desde el centro del elemento en pantalla: V - (containerCenter + pan)
+ *   2. dividir por zoom (des-zoom)
+ *   3. aplicar rotación inversa: R(-rotation) * (V_unzoomed)
+ *   4. sumar (W/2, H/2) para pasar de coords-centradas a bitmap
  */
 export function screenToCanvas(
   screenX: number,
@@ -120,30 +189,28 @@ export function screenToCanvas(
   projectWidth: number,
   projectHeight: number
 ): { x: number; y: number } {
-  // 1. coordenadas relativas al elemento canvas
-  const rx = screenX - canvasRect.left;
-  const ry = screenY - canvasRect.top;
+  // 1. offset desde el centro del contenedor en coords de pantalla
+  const dx = screenX - canvasRect.left - canvasRect.width / 2;
+  const dy = screenY - canvasRect.top - canvasRect.height / 2;
 
-  // 2. trasladar por pan y zoom
-  const cx = canvasRect.width / 2;
-  const cy = canvasRect.height / 2;
+  // 2. restar PRIMERO el pan (en coords de pantalla, antes de rotar)
+  const sx = dx - view.panX;
+  const sy = dy - view.panY;
 
-  // 3. rotar inversamente alrededor del centro del canvas
-  const dx = rx - cx;
-  const dy = ry - cy;
+  // 3. dividir por zoom (des-zoom)
+  const ux = sx / view.zoom;
+  const uy = sy / view.zoom;
+
+  // 4. rotación inversa
   const angle = (-view.rotation * Math.PI) / 180;
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
-  const rx2 = dx * cos - dy * sin;
-  const ry2 = dx * sin + dy * cos;
+  const rx = ux * cos - uy * sin;
+  const ry = ux * sin + uy * cos;
 
-  // 4. aplicar pan
-  const px = (rx2 - view.panX) / view.zoom;
-  const py = (ry2 - view.panY) / view.zoom;
-
-  // 5. convertir de coordenadas centradas a coordenadas de bitmap
-  const bx = px + projectWidth / 2;
-  const by = py + projectHeight / 2;
+  // 5. convertir de coords-centradas a bitmap (sumar W/2, H/2)
+  const bx = rx + projectWidth / 2;
+  const by = ry + projectHeight / 2;
   return { x: bx, y: by };
 }
 

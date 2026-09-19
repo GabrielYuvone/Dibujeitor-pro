@@ -259,6 +259,11 @@ export function EditorView() {
               <Toolbar />
             </div>
 
+            {/* Panel de capas (entre herramientas y lienzo) */}
+            <div className="w-56 shrink-0 border-l border-border">
+              <LayersPanel />
+            </div>
+
             {/* Centro: lienzo */}
             <div className="flex-1 flex flex-col overflow-hidden">
               <div className="flex-1 relative">
