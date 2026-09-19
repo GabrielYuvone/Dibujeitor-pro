@@ -160,6 +160,99 @@ export function drawPencilDab(
   }
 }
 
+/**
+ * Dibuja un segmento de trazo con pluma de tinta.
+ *
+ * La pluma de tinta tiene un flujo irregular: a veces suelta más tinta
+ * (línea más gruesa y opaca), a veces menos (línea más fina y tenue).
+ * Simula una pluma estilográfica real con tinta que fluye variable.
+ *
+ * - Tamaño base sufre variación aleatoria (±40%)
+ * - Opacidad varía (0.5 a 1.0)
+ * - A veces agrega pequeñas salpicaduras alrededor del trazo
+ * - El trazo principal es continuo pero con ancho variable
+ */
+export function drawInkSegment(
+  ctx: CanvasRenderingContext2D,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  baseSize: number,
+  baseColor: string,
+  baseAlpha: number,
+  pressure = 1
+) {
+  // Variación de flujo de tinta (random entre 0.6 y 1.0)
+  const flow = 0.6 + Math.random() * 0.4;
+  // Ancho variable: a veces grueso, a veces fino
+  const size = baseSize * flow * (0.7 + Math.random() * 0.6) * pressure;
+  // Opacidad variable
+  const alpha = baseAlpha * (0.5 + Math.random() * 0.5);
+
+  ctx.strokeStyle = baseColor;
+  ctx.fillStyle = baseColor;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.globalAlpha = alpha;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.lineWidth = Math.max(0.5, size);
+
+  // Trazo principal
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  // A veces agrega salpicaduras (10% de probabilidad)
+  if (Math.random() < 0.1) {
+    const splatterCount = Math.floor(Math.random() * 3) + 1;
+    for (let i = 0; i < splatterCount; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const r = size * (1 + Math.random() * 3);
+      const px = x2 + Math.cos(angle) * r;
+      const py = y2 + Math.sin(angle) * r;
+      const s = size * (0.1 + Math.random() * 0.2);
+      ctx.globalAlpha = alpha * 0.6;
+      ctx.beginPath();
+      ctx.arc(px, py, Math.max(0.3, s), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // A veces agrega un "blob" de tinta extra en el extremo
+  if (Math.random() < 0.15) {
+    ctx.globalAlpha = alpha * 0.8;
+    ctx.beginPath();
+    ctx.arc(x2, y2, Math.max(0.5, size * 0.4), 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/**
+ * Dibuja un punto inicial de pluma de tinta.
+ */
+export function drawInkDab(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  baseSize: number,
+  baseColor: string,
+  baseAlpha: number,
+  pressure = 1
+) {
+  const flow = 0.7 + Math.random() * 0.3;
+  const size = baseSize * flow * pressure;
+  const alpha = baseAlpha * (0.7 + Math.random() * 0.3);
+
+  ctx.fillStyle = baseColor;
+  ctx.globalAlpha = alpha;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.beginPath();
+  ctx.arc(x, y, Math.max(0.5, size / 2), 0, Math.PI * 2);
+  ctx.fill();
+}
+
 // ---------------------------------------------------------------------------
 // Conversión de coordenadas de pantalla a coordenadas del lienzo
 // ---------------------------------------------------------------------------

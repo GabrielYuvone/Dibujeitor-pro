@@ -98,6 +98,9 @@ export function EditorView() {
         case "b":
           useStore.getState().setTool("brush");
           break;
+        case "k":
+          useStore.getState().setTool("ink");
+          break;
         case "e":
           useStore.getState().setTool("eraser");
           break;

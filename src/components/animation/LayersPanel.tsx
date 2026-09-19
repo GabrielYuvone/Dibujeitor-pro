@@ -110,22 +110,30 @@ export function LayersPanel() {
             onClick={() => selectLayer(layer.id)}
           >
             <button
-              className="p-1 rounded hover:bg-muted"
+              className={`p-1.5 rounded transition-colors ${
+                layer.visible
+                  ? "hover:bg-muted text-foreground"
+                  : "bg-destructive/20 text-destructive hover:bg-destructive/30"
+              }`}
               onClick={(e) => {
                 e.stopPropagation();
                 toggleLayerVisible(layer.id);
               }}
-              title={layer.visible ? "Ocultar" : "Mostrar"}
+              title={layer.visible ? "Ocultar capa (click para ocultar)" : "Mostrar capa (click para mostrar)"}
             >
               {layer.visible ? <Eye size={14} /> : <EyeOff size={14} />}
             </button>
             <button
-              className="p-1 rounded hover:bg-muted"
+              className={`p-1.5 rounded transition-colors ${
+                layer.locked
+                  ? "bg-amber-500/30 text-amber-500 hover:bg-amber-500/40"
+                  : "hover:bg-muted text-muted-foreground"
+              }`}
               onClick={(e) => {
                 e.stopPropagation();
                 toggleLayerLocked(layer.id);
               }}
-              title={layer.locked ? "Desbloquear" : "Bloquear"}
+              title={layer.locked ? "Desbloquear capa (click para desbloquear)" : "Bloquear capa (click para bloquear)"}
             >
               {layer.locked ? <Lock size={14} /> : <Unlock size={14} />}
             </button>
@@ -141,7 +149,9 @@ export function LayersPanel() {
                 className="p-1 rounded hover:bg-muted"
                 onClick={(e) => {
                   e.stopPropagation();
-                  moveLayer(layer.id, "up");
+                  // NOTA: el display está invertido (getOrderedLayers hace reverse)
+                  // Por eso "Subir" en la UI corresponde a "down" en el store
+                  moveLayer(layer.id, "down");
                 }}
                 title="Subir"
               >
@@ -151,7 +161,7 @@ export function LayersPanel() {
                 className="p-1 rounded hover:bg-muted"
                 onClick={(e) => {
                   e.stopPropagation();
-                  moveLayer(layer.id, "down");
+                  moveLayer(layer.id, "up");
                 }}
                 title="Bajar"
               >

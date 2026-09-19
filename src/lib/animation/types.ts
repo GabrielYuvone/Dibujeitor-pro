@@ -49,6 +49,7 @@ export interface ProjectSettings {
 export type ToolId =
   | "pencil"
   | "brush"
+  | "ink"
   | "eraser"
   | "line"
   | "rectangle"

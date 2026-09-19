@@ -15,6 +15,8 @@ import {
   configurePencil,
   configureStroke,
   createSmoother,
+  drawInkDab,
+  drawInkSegment,
   drawPencilDab,
   floodFill,
   hexToRgb,
@@ -109,8 +111,11 @@ export function useDrawingEngine({
   const activeProjectRef = useRef(project);
   const isPanningRef = useRef(false);
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  // Zoom por arrastre (modificador Z)
+  const isZoomingRef = useRef(false);
+  const zoomStartRef = useRef<{ y: number; zoom: number } | null>(null);
   // Modificador Z: mientras se mantiene Z apretado, el wheel y el drag
-  // hacen zoom/pan en lugar de dibujar. Es un atajo temporal.
+  // hacen zoom (arrastra hacia arriba = acerca, hacia abajo = aleja).
   const zModifierRef = useRef(false);
   // Refs para selección (definidos al inicio del hook)
   const selectionBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
@@ -131,10 +136,14 @@ export function useDrawingEngine({
     const onUp = (e: KeyboardEvent) => {
       if (e.key === "z" || e.key === "Z") {
         zModifierRef.current = false;
-        // Si estábamos paneando con Z, soltar
+        // Si estábamos paneando o zoomeando con Z, soltar
         if (isPanningRef.current) {
           isPanningRef.current = false;
           panStartRef.current = null;
+        }
+        if (isZoomingRef.current) {
+          isZoomingRef.current = false;
+          zoomStartRef.current = null;
         }
       }
     };
@@ -260,15 +269,16 @@ export function useDrawingEngine({
 
       const tool = activeToolRef.current;
 
-      // --- MODIFICADOR Z: si Z está apretado, comportarse como pan (zoom con wheel) ---
+      // --- MODIFICADOR Z: si Z está apretado, entrar en modo zoom por arrastre ---
+      // Arrastra hacia ARRIBA (dy<0) para acercar; hacia ABAJO (dy>0) para alejar.
+      // Mientras tanto, la rueda del mouse sigue funcionando para zoom.
       if (zModifierRef.current) {
-        isPanningRef.current = true;
+        isPanningRef.current = false;
+        isZoomingRef.current = true;
         isDrawingRef.current = false;
-        panStartRef.current = {
-          x: e.clientX,
+        zoomStartRef.current = {
           y: e.clientY,
-          panX: activeCanvasViewRef.current.panX,
-          panY: activeCanvasViewRef.current.panY,
+          zoom: activeCanvasViewRef.current.zoom,
         };
         return;
       }
@@ -337,7 +347,7 @@ export function useDrawingEngine({
       );
 
       let drawingId = cell?.drawingId ?? null;
-      if (!drawingId) {
+      if (!drawingId && (tool === "pencil" || tool === "brush" || tool === "ink" || tool === "eraser" || tool === "line" || tool === "rectangle" || tool === "ellipse" || tool === "fill")) {
         // Crear drawing vacío inmediatamente (síncrono)
         const newId = genId("draw");
         const now = Date.now();
@@ -438,7 +448,7 @@ export function useDrawingEngine({
         return;
       }
 
-      // Lápiz, pincel, goma: trazar punto inicial
+      // Lápiz, pincel, pluma de tinta, goma: trazar punto inicial
       const b = activeBrushRef.current;
       if (tool === "pencil") {
         // Lápiz: textura de mina de grafito
@@ -447,6 +457,12 @@ export function useDrawingEngine({
           ? b.size * Math.max(b.minSizePressure, pressureRef.current)
           : b.size;
         drawPencilDab(ctx, pt.x, pt.y, size, b.opacity * 0.7);
+      } else if (tool === "ink") {
+        // Pluma de tinta: punto inicial con flujo irregular
+        const size = b.pressureSensitivity
+          ? b.size * Math.max(b.minSizePressure, pressureRef.current)
+          : b.size;
+        drawInkDab(ctx, pt.x, pt.y, size, b.color, b.opacity, pressureRef.current);
       } else if (tool === "brush") {
         // Pincel: trazo suave y redondo
         configureStroke(ctx, b, pressureRef.current);
@@ -467,7 +483,19 @@ export function useDrawingEngine({
 
   const handleMove = useCallback(
     (e: PointerEvent) => {
-      // Pan (incluye modificador Z apretado)
+      // Zoom por arrastre (modificador Z apretado + drag)
+      // dy < 0 (arrastra hacia arriba) → zoom in
+      // dy > 0 (arrastra hacia abajo) → zoom out
+      if (isZoomingRef.current && zoomStartRef.current) {
+        const dy = e.clientY - zoomStartRef.current.y;
+        // Cada 100px de drag cambia el zoom por un factor de 2
+        const factor = Math.exp(-dy / 200);
+        const newZoom = Math.max(0.05, Math.min(20, zoomStartRef.current.zoom * factor));
+        setCanvasView({ zoom: newZoom });
+        return;
+      }
+
+      // Pan (tool "pan")
       if (isPanningRef.current && panStartRef.current) {
         const dx = e.clientX - panStartRef.current.x;
         const dy = e.clientY - panStartRef.current.y;
@@ -517,6 +545,26 @@ export function useDrawingEngine({
             const y = lastPosRef.current.y + dy * t;
             drawPencilDab(ctx, x, y, size, b.opacity * 0.5);
           }
+        }
+        lastPosRef.current = smoothed;
+      } else if (tool === "ink") {
+        // Pluma de tinta: trazo con flujo irregular
+        const size = b.pressureSensitivity
+          ? b.size * Math.max(b.minSizePressure, pressureRef.current)
+          : b.size;
+        const smoothed = smoothPoint(smootherRef.current, pt.x, pt.y);
+        if (lastPosRef.current) {
+          drawInkSegment(
+            ctx,
+            lastPosRef.current.x,
+            lastPosRef.current.y,
+            smoothed.x,
+            smoothed.y,
+            size,
+            b.color,
+            b.opacity,
+            pressureRef.current
+          );
         }
         lastPosRef.current = smoothed;
       } else if (tool === "brush" || tool === "eraser") {
@@ -575,6 +623,12 @@ export function useDrawingEngine({
 
   const handleUp = useCallback(
     async (e: PointerEvent) => {
+      // Zoom por arrastre fin
+      if (isZoomingRef.current) {
+        isZoomingRef.current = false;
+        zoomStartRef.current = null;
+        return;
+      }
       // Pan fin
       if (isPanningRef.current) {
         isPanningRef.current = false;
@@ -587,13 +641,11 @@ export function useDrawingEngine({
 
       const tool = activeToolRef.current;
 
-      // Para selection: guardar selección y limpiar overlay
+      // Para selection: guardar bounds, mantener visibles las "marching ants"
+      // y EXTRAER el contenido (cortar). Luego el usuario puede pegar con Ctrl+V
+      // o mover con la herramienta Transformar.
       if (tool === "selection") {
         const overlay = overlayCanvasRef.current;
-        if (overlay) {
-          const octx = overlay.getContext("2d");
-          octx?.clearRect(0, 0, overlay.width, overlay.height);
-        }
         // Calcular bounds
         if (startPosRef.current && lastPosRef.current) {
           const x = Math.min(startPosRef.current.x, lastPosRef.current.x);
@@ -602,20 +654,46 @@ export function useDrawingEngine({
           const h = Math.abs(lastPosRef.current.y - startPosRef.current.y);
           if (w > 2 && h > 2) {
             selectionBoundsRef.current = { x, y, width: w, height: h };
-            // Extraer pixels seleccionados
+            // Extraer pixels seleccionados (cortar)
             const canvas = drawingCanvasRef.current;
             if (canvas) {
               const ctx = canvas.getContext("2d");
               if (ctx) {
                 try {
                   selectionImageRef.current = ctx.getImageData(x, y, w, h);
-                  // Limpiar la región seleccionada (cortar)
+                  // Limpiar la región seleccionada
                   ctx.clearRect(x, y, w, h);
                   await commitDrawing();
                 } catch (err) {
                   console.error(err);
                 }
               }
+            }
+            // Dibujar "marching ants" en overlay (animación)
+            if (overlay) {
+              const octx = overlay.getContext("2d");
+              if (octx) {
+                octx.clearRect(0, 0, overlay.width, overlay.height);
+                octx.strokeStyle = "#4dabf7";
+                octx.lineWidth = 1.5;
+                octx.setLineDash([6, 4]);
+                octx.strokeRect(x, y, w, h);
+                octx.setLineDash([]);
+                // Indicador de "contenido cortado" — texto pequeño
+                octx.fillStyle = "rgba(77, 171, 247, 0.9)";
+                octx.font = "11px sans-serif";
+                octx.textAlign = "left";
+                octx.textBaseline = "top";
+                octx.fillText("✂ Ctrl+V para pegar", x + 4, y - 14);
+              }
+            }
+          } else {
+            // Selección muy pequeña: borrar selección existente
+            selectionBoundsRef.current = null;
+            selectionImageRef.current = null;
+            if (overlay) {
+              const octx = overlay.getContext("2d");
+              octx?.clearRect(0, 0, overlay.width, overlay.height);
             }
           }
         }
@@ -657,7 +735,13 @@ export function useDrawingEngine({
   const clearSelection = useCallback(() => {
     selectionBoundsRef.current = null;
     selectionImageRef.current = null;
-  }, []);
+    // Limpiar overlay (borrar marching ants)
+    const overlay = overlayCanvasRef.current;
+    if (overlay) {
+      const octx = overlay.getContext("2d");
+      octx?.clearRect(0, 0, overlay.width, overlay.height);
+    }
+  }, [overlayCanvasRef]);
 
   const pasteSelection = useCallback(async () => {
     const canvas = drawingCanvasRef.current;
@@ -668,7 +752,49 @@ export function useDrawingEngine({
     if (!ctx) return;
     ctx.putImageData(sel, bounds.x, bounds.y);
     await commitDrawing();
-  }, [drawingCanvasRef, commitDrawing]);
+    // Limpiar overlay y selección
+    const overlay = overlayCanvasRef.current;
+    if (overlay) {
+      const octx = overlay.getContext("2d");
+      octx?.clearRect(0, 0, overlay.width, overlay.height);
+    }
+    selectionBoundsRef.current = null;
+    selectionImageRef.current = null;
+  }, [drawingCanvasRef, overlayCanvasRef, commitDrawing]);
+
+  // ---------------------------------------------------------------------------
+  // Atajos de teclado para selección (Ctrl+V, Delete, Escape)
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
+        return;
+      }
+      // Ctrl/Cmd + V = pegar selección
+      if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        pasteSelection();
+        return;
+      }
+      // Delete o Backspace = limpiar selección (si hay)
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectionBoundsRef.current) {
+          e.preventDefault();
+          clearSelection();
+        }
+        return;
+      }
+      // Escape = limpiar selección
+      if (e.key === "Escape") {
+        clearSelection();
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pasteSelection, clearSelection]);
 
   // ---------------------------------------------------------------------------
   // Window listeners para move/up (bulletproof — no dependen de React)

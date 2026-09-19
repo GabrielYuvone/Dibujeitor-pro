@@ -7,6 +7,7 @@ import type { ToolId } from "@/lib/animation/types";
 import {
   Pencil,
   Brush,
+  Pen,
   Eraser,
   Slash,
   Square,
@@ -31,6 +32,7 @@ interface ToolDef {
 const TOOLS: ToolDef[] = [
   { id: "pencil", label: "Lápiz", icon: <Pencil size={16} />, shortcut: "P" },
   { id: "brush", label: "Pincel", icon: <Brush size={16} />, shortcut: "B" },
+  { id: "ink", label: "Pluma tinta", icon: <Pen size={16} />, shortcut: "K" },
   { id: "eraser", label: "Goma", icon: <Eraser size={16} />, shortcut: "E" },
   { id: "line", label: "Línea", icon: <Slash size={16} />, shortcut: "L" },
   { id: "rectangle", label: "Rectángulo", icon: <Square size={16} />, shortcut: "R" },
