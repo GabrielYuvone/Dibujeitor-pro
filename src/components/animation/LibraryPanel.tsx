@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Upload, Trash2, Library as LibIcon, Plus } from "lucide-react";
 import type { LibraryItem } from "@/lib/animation/types";
 import { genId } from "@/lib/animation/utils";
-import { preloadImage } from "@/lib/animation/useDrawingEngine";
 
 export function LibraryPanel() {
   const project = useStore((s) => s.project);
@@ -66,88 +65,35 @@ export function LibraryPanel() {
     });
   };
 
-  // Agregar imagen de la biblioteca al canvas actual
+  // Agregar imagen de la biblioteca al canvas: en lugar de estirarla al
+  // tamaño del canvas, la agregamos con su aspect ratio original centrada
+  // y entramos en modo "placement" donde el usuario puede moverla y
+  // escalarla de las puntas antes de confirmar.
   const addToCanvas = async (item: LibraryItem) => {
     if (!project || !project.currentLayerId) return;
     const layer = project.layers.find((l) => l.id === project.currentLayerId);
     if (!layer || layer.locked || !layer.visible || layer.type === "audio") return;
 
-    // Crear un drawing nuevo con la imagen
-    const drawingId = genId("draw");
-    const now = Date.now();
-    // Pre-cachear la imagen
-    await preloadImage(drawingId, item.dataUrl);
+    // Determinar tamaño nativo de la imagen
+    let nativeW = item.width ?? project.settings.width;
+    let nativeH = item.height ?? project.settings.height;
 
-    // Calcular dataUrl escalado al tamaño del canvas si la imagen es más grande
-    let finalDataUrl = item.dataUrl;
-    const imgW = item.width ?? project.settings.width;
-    const imgH = item.height ?? project.settings.height;
-    if (imgW !== project.settings.width || imgH !== project.settings.height) {
-      // Reescalar a las dimensiones del proyecto
-      const tmpCanvas = document.createElement("canvas");
-      tmpCanvas.width = project.settings.width;
-      tmpCanvas.height = project.settings.height;
-      const ctx = tmpCanvas.getContext("2d")!;
+    // Si no tenemos dimensiones guardadas, las leemos de la imagen
+    if (!item.width || !item.height) {
       const img = new Image();
       img.src = item.dataUrl;
       await new Promise<void>((resolve) => {
         img.onload = () => {
-          ctx.drawImage(img, 0, 0, project.settings.width, project.settings.height);
+          nativeW = img.naturalWidth;
+          nativeH = img.naturalHeight;
           resolve();
         };
         img.onerror = () => resolve();
       });
-      finalDataUrl = tmpCanvas.toDataURL("image/png");
-      await preloadImage(drawingId, finalDataUrl);
     }
 
-    useStore.setState((s) => {
-      if (!s.project) return {};
-      // Buscar celda actual o crear nueva
-      const layers = s.project.layers.map((l) => {
-        if (l.id !== layer.id) return l;
-        const cells = [...l.cells];
-        const existing = cells.find(
-          (c) =>
-            s.project!.currentFrame >= c.startFrame &&
-            s.project!.currentFrame < c.startFrame + c.duration
-        );
-        if (existing) {
-          const idx = cells.indexOf(existing);
-          // Si la celda ya tiene un drawing, lo pisamos
-          cells[idx] = { ...existing, drawingId };
-        } else {
-          cells.push({
-            id: genId("cell"),
-            drawingId,
-            startFrame: s.project.currentFrame,
-            duration: 1,
-          });
-          cells.sort((a, b) => a.startFrame - b.startFrame);
-        }
-        return { ...l, cells };
-      });
-      return {
-        project: {
-          ...s.project,
-          layers,
-          drawings: {
-            ...s.project.drawings,
-            [drawingId]: {
-              id: drawingId,
-              name: item.name,
-              dataUrl: finalDataUrl,
-              width: s.project.settings.width,
-              height: s.project.settings.height,
-              createdAt: now,
-              updatedAt: now,
-            },
-          },
-          dirty: true,
-          updatedAt: now,
-        },
-      };
-    });
+    // Iniciar el modo placement (preserva aspect ratio)
+    useStore.getState().startImagePlacement(item.dataUrl, nativeW, nativeH);
   };
 
   const removeFromLibrary = (id: string) => {

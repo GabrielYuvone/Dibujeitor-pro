@@ -5,6 +5,7 @@ import { useStore, getCurrentLayer } from "@/lib/animation/store";
 import { useDrawingEngine, getCachedImage, preloadImage } from "@/lib/animation/useDrawingEngine";
 import { findCellAtFrame } from "@/lib/animation/utils";
 import { executeActions, evalCondition } from "@/lib/animation/actions";
+import { screenToCanvas } from "@/lib/animation/drawing";
 
 interface CanvasStageProps {
   width: number;
@@ -34,6 +35,10 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   const viewMode = useStore((s) => s.viewMode);
   const playback = useStore((s) => s.playback);
   const resetCanvasView = useStore((s) => s.resetCanvasView);
+  const imagePlacement = useStore((s) => s.imagePlacement);
+  const updateImagePlacement = useStore((s) => s.updateImagePlacement);
+  const confirmImagePlacement = useStore((s) => s.confirmImagePlacement);
+  const cancelImagePlacement = useStore((s) => s.cancelImagePlacement);
 
   const drawingCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -41,6 +46,10 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   const backgroundRef = useRef<HTMLCanvasElement | null>(null);
   const compositedRef = useRef<HTMLCanvasElement | null>(null);
   const lastLoadedDrawingRef = useRef<string | null>(null);
+  // Refs para el manejo de drag/scale de la imagen colocada
+  const placementImageRef = useRef<HTMLImageElement | null>(null);
+  const placementModeRef = useRef<"none" | "move" | "scale-tl" | "scale-tr" | "scale-bl" | "scale-br">("none");
+  const placementStartRef = useRef<{ x: number; y: number; px: number; py: number; pw: number; ph: number } | null>(null);
 
   const engine = useDrawingEngine({
     drawingCanvasRef,
@@ -177,6 +186,220 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   }, [project, onion, viewMode, playback.playing]);
 
   // ---------------------------------------------------------------------------
+  // Dibujar overlay del placement de imagen (modo transformación)
+  // ---------------------------------------------------------------------------
+
+  const drawPlacementOverlay = useCallback(() => {
+    const overlay = overlayCanvasRef.current;
+    if (!overlay || !imagePlacement) return;
+    const octx = overlay.getContext("2d");
+    if (!octx) return;
+
+    // Limpiar el overlay primero
+    octx.clearRect(0, 0, overlay.width, overlay.height);
+
+    const img = placementImageRef.current;
+    if (!img || !img.complete) return;
+
+    const { x, y, width: w, height: h } = imagePlacement;
+    // Dibujar la imagen colocada (semi-transparente para que se vea
+    // que está en modo edición)
+    octx.globalAlpha = 0.95;
+    octx.drawImage(img, x, y, w, h);
+    octx.globalAlpha = 1;
+
+    // Bounding box
+    octx.strokeStyle = "#4dabf7";
+    octx.lineWidth = 1.5;
+    octx.setLineDash([6, 4]);
+    octx.strokeRect(x, y, w, h);
+    octx.setLineDash([]);
+
+    // 4 corner handles (cuadrados azules)
+    const handleSize = 10;
+    const handles = [
+      { x: x - handleSize / 2, y: y - handleSize / 2 },          // top-left
+      { x: x + w - handleSize / 2, y: y - handleSize / 2 },       // top-right
+      { x: x - handleSize / 2, y: y + h - handleSize / 2 },       // bottom-left
+      { x: x + w - handleSize / 2, y: y + h - handleSize / 2 },   // bottom-right
+    ];
+    for (const hd of handles) {
+      octx.fillStyle = "#4dabf7";
+      octx.fillRect(hd.x, hd.y, handleSize, handleSize);
+      octx.strokeStyle = "#fff";
+      octx.lineWidth = 1;
+      octx.strokeRect(hd.x, hd.y, handleSize, handleSize);
+    }
+
+    // Texto de ayuda
+    octx.fillStyle = "rgba(77, 171, 247, 0.95)";
+    octx.font = "11px sans-serif";
+    octx.textAlign = "left";
+    octx.textBaseline = "top";
+    octx.fillText("Enter para confirmar · Esc para cancelar · arrastrá para mover, puntas para escalar", x, y - 16);
+  }, [imagePlacement]);
+
+  // Cargar la imagen del placement cuando cambia
+  useEffect(() => {
+    if (!imagePlacement) {
+      placementImageRef.current = null;
+      // Limpiar overlay
+      const overlay = overlayCanvasRef.current;
+      if (overlay) {
+        const octx = overlay.getContext("2d");
+        octx?.clearRect(0, 0, overlay.width, overlay.height);
+      }
+      return;
+    }
+    // Pre-cargar la imagen
+    const img = new Image();
+    img.onload = () => {
+      placementImageRef.current = img;
+      drawPlacementOverlay();
+    };
+    img.src = imagePlacement.dataUrl;
+  }, [imagePlacement, drawPlacementOverlay]);
+
+  // Redibujar el overlay cuando cambia el placement (drag/scale)
+  useEffect(() => {
+    drawPlacementOverlay();
+  }, [drawPlacementOverlay]);
+
+  // ---------------------------------------------------------------------------
+  // Handlers para drag/scale de la imagen colocada
+  // ---------------------------------------------------------------------------
+
+  const getCanvasPointSimple = useCallback(
+    (clientX: number, clientY: number): { x: number; y: number } | null => {
+      const container = containerRef.current;
+      const proj = project;
+      if (!container || !proj) return null;
+      const rect = container.getBoundingClientRect();
+      return screenToCanvas(clientX, clientY, rect, canvasView, proj.settings.width, proj.settings.height);
+    },
+    [containerRef, project, canvasView]
+  );
+
+  const handlePlacementPointerDown = useCallback(
+    (e: React.PointerEvent): boolean => {
+      if (!imagePlacement) return false;
+      const pt = getCanvasPointSimple(e.clientX, e.clientY);
+      if (!pt) return false;
+      const { x, y, width: w, height: h } = imagePlacement;
+      const handleSize = 14; // área de click para los handles (más grande que el visual)
+      // Verificar si el click está en algún corner handle
+      const inTL = pt.x >= x - handleSize / 2 && pt.x <= x + handleSize / 2 &&
+                   pt.y >= y - handleSize / 2 && pt.y <= y + handleSize / 2;
+      const inTR = pt.x >= x + w - handleSize / 2 && pt.x <= x + w + handleSize / 2 &&
+                   pt.y >= y - handleSize / 2 && pt.y <= y + handleSize / 2;
+      const inBL = pt.x >= x - handleSize / 2 && pt.x <= x + handleSize / 2 &&
+                   pt.y >= y + h - handleSize / 2 && pt.y <= y + h + handleSize / 2;
+      const inBR = pt.x >= x + w - handleSize / 2 && pt.x <= x + w + handleSize / 2 &&
+                   pt.y >= y + h - handleSize / 2 && pt.y <= y + h + handleSize / 2;
+      const inImage = pt.x >= x && pt.x <= x + w && pt.y >= y && pt.y <= y + h;
+
+      let mode: typeof placementModeRef.current = "none";
+      if (inTL) mode = "scale-tl";
+      else if (inTR) mode = "scale-tr";
+      else if (inBL) mode = "scale-bl";
+      else if (inBR) mode = "scale-br";
+      else if (inImage) mode = "move";
+
+      if (mode === "none") return false;
+
+      placementModeRef.current = mode;
+      placementStartRef.current = {
+        x: pt.x,
+        y: pt.y,
+        px: imagePlacement.x,
+        py: imagePlacement.y,
+        pw: imagePlacement.width,
+        ph: imagePlacement.height,
+      };
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      return true;
+    },
+    [imagePlacement, getCanvasPointSimple]
+  );
+
+  const handlePlacementPointerMove = useCallback(
+    (e: React.PointerEvent): boolean => {
+      if (placementModeRef.current === "none" || !imagePlacement || !placementStartRef.current) {
+        return false;
+      }
+      const pt = getCanvasPointSimple(e.clientX, e.clientY);
+      if (!pt) return true;
+      const start = placementStartRef.current;
+      const dx = pt.x - start.x;
+      const dy = pt.y - start.y;
+      const aspect = imagePlacement.nativeW / imagePlacement.nativeH;
+
+      if (placementModeRef.current === "move") {
+        updateImagePlacement({
+          x: start.px + dx,
+          y: start.py + dy,
+        });
+      } else {
+        // Escalar desde el centro (más simple y predecible).
+        // El usuario arrastra un corner; la imagen crece o se achica
+        // manteniendo el centro fijo y preservando aspect ratio.
+        const cx = start.px + start.pw / 2;
+        const cy = start.py + start.ph / 2;
+        const newDx = pt.x - cx;
+        const newDy = pt.y - cy;
+        const newDist = Math.sqrt(newDx * newDx + newDy * newDy);
+        // Distancia original desde el centro a un corner
+        const cornerDistX = start.pw / 2;
+        const cornerDistY = start.ph / 2;
+        const cornerDist = Math.sqrt(cornerDistX * cornerDistX + cornerDistY * cornerDistY);
+        const scale = newDist / Math.max(1, cornerDist);
+        // Calcular nuevo tamaño preservando aspect ratio
+        let newW = Math.max(20, Math.round(start.pw * scale));
+        let newH = Math.max(20, Math.round(newW / aspect));
+        // Recalcular newW para mantener aspect exacto
+        newW = Math.round(newH * aspect);
+        // Centro fijo
+        const newX = Math.round(cx - newW / 2);
+        const newY = Math.round(cy - newH / 2);
+        updateImagePlacement({
+          x: newX,
+          y: newY,
+          width: newW,
+          height: newH,
+        });
+      }
+      return true;
+    },
+    [imagePlacement, getCanvasPointSimple, updateImagePlacement]
+  );
+
+  const handlePlacementPointerUp = useCallback(
+    (e: React.PointerEvent): boolean => {
+      if (placementModeRef.current === "none") return false;
+      placementModeRef.current = "none";
+      placementStartRef.current = null;
+      return true;
+    },
+    []
+  );
+
+  // Enter = confirmar, Escape = cancelar
+  useEffect(() => {
+    if (!imagePlacement) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        confirmImagePlacement();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancelImagePlacement();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [imagePlacement, confirmImagePlacement, cancelImagePlacement]);
+
+  // ---------------------------------------------------------------------------
   // Efecto: ajustar tamaños de canvas
   // ---------------------------------------------------------------------------
 
@@ -283,8 +506,28 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           width,
           height,
           boxShadow: "0 0 0 1px rgba(255,255,255,0.2), 0 10px 30px rgba(0,0,0,0.5)",
+          cursor: imagePlacement ? "move" : undefined,
         }}
-        onPointerDown={engine.handlePointerDown}
+        onPointerDown={(e) => {
+          // Si hay un placement activo, interceptar el evento
+          if (imagePlacement && handlePlacementPointerDown(e)) {
+            e.stopPropagation();
+            return;
+          }
+          engine.handlePointerDown(e);
+        }}
+        onPointerMove={(e) => {
+          if (imagePlacement && handlePlacementPointerMove(e)) {
+            e.stopPropagation();
+            return;
+          }
+        }}
+        onPointerUp={(e) => {
+          if (imagePlacement && handlePlacementPointerUp(e)) {
+            e.stopPropagation();
+            return;
+          }
+        }}
       >
         <canvas
           ref={backgroundRef}

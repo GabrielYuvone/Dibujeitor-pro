@@ -73,6 +73,13 @@ interface AppState {
   redoStack: HistoryEntry[];
   skipReloadOnHistory: boolean;
 
+  // Placement de imagen importada: cuando el usuario hace click en una
+  // imagen de la biblioteca, se activa el modo transformación. La imagen
+  // se muestra sobre el canvas con su aspect ratio original, y el usuario
+  // puede moverla (drag dentro) o escalarla (drag de las puntas) antes de
+  // confirmar (Enter) o cancelar (Escape).
+  imagePlacement: ImagePlacement | null;
+
   // Acciones
   // Projects
   refreshProjects: () => Promise<void>;
@@ -189,6 +196,12 @@ interface AppState {
   canUndo: () => boolean;
   canRedo: () => boolean;
 
+  // Placement de imagen (modo transformación de imagen importada)
+  startImagePlacement: (dataUrl: string, nativeW: number, nativeH: number) => void;
+  updateImagePlacement: (patch: Partial<ImagePlacement>) => void;
+  confirmImagePlacement: () => Promise<void>;
+  cancelImagePlacement: () => void;
+
   // Autosave
   triggerAutosave: () => Promise<void>;
 }
@@ -201,6 +214,20 @@ interface HistoryEntry {
   drawingId: ID;
   prevDataUrl: string;
   newDataUrl: string;
+}
+
+// ---------------------------------------------------------------------------
+// Tipo para el placement de imagen (transformación interactiva)
+// ---------------------------------------------------------------------------
+
+interface ImagePlacement {
+  dataUrl: string;        // imagen original (data URL)
+  x: number;               // posición x en coords del canvas (esquina sup-izq)
+  y: number;               // posición y
+  width: number;           // ancho actual (preserva aspect ratio)
+  height: number;          // alto actual
+  nativeW: number;         // ancho original de la imagen (px)
+  nativeH: number;         // alto original (px)
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +290,8 @@ export const useStore = create<AppState>((set, get) => ({
   // Indicador para evitar que el motor de dibujo recargue el canvas
   // cuando se hace undo/redo (la imagen cacheada ya está actualizada)
   skipReloadOnHistory: false,
+  // Placement de imagen (transformación interactiva)
+  imagePlacement: null as ImagePlacement | null,
 
   // -------------------------------------------------------------------------
   // Projects
@@ -1137,6 +1166,169 @@ export const useStore = create<AppState>((set, get) => ({
 
   canUndo: () => get().undoStack.length > 0,
   canRedo: () => get().redoStack.length > 0,
+
+  // -------------------------------------------------------------------------
+  // Placement de imagen (modo transformación de imagen importada)
+  // -------------------------------------------------------------------------
+
+  startImagePlacement: (dataUrl, nativeW, nativeH) => {
+    const s = get();
+    if (!s.project) return;
+    // Calcular tamaño inicial preservando aspect ratio:
+    // - Si la imagen es más chica que el canvas, usar tamaño nativo
+    // - Si es más grande, escalar para que entre (con margen del 10%)
+    const cw = s.project.settings.width;
+    const ch = s.project.settings.height;
+    const margin = 0.1; // 10% de margen
+    const maxW = cw * (1 - 2 * margin);
+    const maxH = ch * (1 - 2 * margin);
+    let w = nativeW;
+    let h = nativeH;
+    if (w > maxW || h > maxH) {
+      const scale = Math.min(maxW / w, maxH / h);
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
+    }
+    // Centrar en el canvas
+    const x = Math.round((cw - w) / 2);
+    const y = Math.round((ch - h) / 2);
+    set({
+      imagePlacement: {
+        dataUrl,
+        x,
+        y,
+        width: w,
+        height: h,
+        nativeW,
+        nativeH,
+      },
+    });
+  },
+
+  updateImagePlacement: (patch) => {
+    set((s) => ({
+      imagePlacement: s.imagePlacement ? { ...s.imagePlacement, ...patch } : null,
+    }));
+  },
+
+  confirmImagePlacement: async () => {
+    const s = get();
+    if (!s.project || !s.imagePlacement) return;
+    const placement = s.imagePlacement;
+    // Renderizar la imagen al tamaño actual en el canvas del drawing activo
+    // Crear nuevo drawing o usar el existente
+    const layer = s.project.layers.find((l) => l.id === s.project!.currentLayerId);
+    if (!layer || layer.locked || !layer.visible || layer.type === "audio") {
+      set({ imagePlacement: null });
+      return;
+    }
+
+    // Cargar la imagen
+    const img = await new Promise<HTMLImageElement | null>((resolve) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => resolve(null);
+      i.src = placement.dataUrl;
+    });
+    if (!img) {
+      set({ imagePlacement: null });
+      return;
+    }
+
+    // Crear un canvas temporal con el contenido actual del drawing + la imagen pegada
+    const tmpCanvas = document.createElement("canvas");
+    tmpCanvas.width = s.project.settings.width;
+    tmpCanvas.height = s.project.settings.height;
+    const tmpCtx = tmpCanvas.getContext("2d")!;
+    // Si hay un drawing existente, dibujarlo primero
+    const cell = layer.cells.find(
+      (c) =>
+        s.project!.currentFrame >= c.startFrame &&
+        s.project!.currentFrame < c.startFrame + c.duration
+    );
+    if (cell?.drawingId) {
+      const existing = s.project.drawings[cell.drawingId];
+      if (existing) {
+        const existingImg = await new Promise<HTMLImageElement | null>((resolve) => {
+          const i = new Image();
+          i.onload = () => resolve(i);
+          i.onerror = () => resolve(null);
+          i.src = existing.dataUrl;
+        });
+        if (existingImg) {
+          tmpCtx.drawImage(existingImg, 0, 0, tmpCanvas.width, tmpCanvas.height);
+        }
+      }
+    }
+    // Dibujar la imagen colocada en su transformación final
+    tmpCtx.drawImage(img, placement.x, placement.y, placement.width, placement.height);
+    const finalDataUrl = tmpCanvas.toDataURL("image/png");
+
+    // Crear/actualizar el drawing con la imagen pegada
+    const drawingId = cell?.drawingId ?? crypto.randomUUID();
+    const now = Date.now();
+    const prevDataUrl = cell?.drawingId ? s.project.drawings[cell.drawingId]?.dataUrl ?? "" : "";
+
+    // Pre-cachear la imagen final
+    const { preloadImage } = await import("./useDrawingEngine");
+    await preloadImage(drawingId, finalDataUrl);
+
+    set((st) => {
+      if (!st.project) return {};
+      const layers = st.project.layers.map((l) => {
+        if (l.id !== layer.id) return l;
+        const cells = [...l.cells];
+        const existingCell = cells.find(
+          (c) =>
+            st.project!.currentFrame >= c.startFrame &&
+            st.project!.currentFrame < c.startFrame + c.duration
+        );
+        if (existingCell) {
+          const idx = cells.indexOf(existingCell);
+          cells[idx] = { ...existingCell, drawingId };
+        } else {
+          cells.push({
+            id: crypto.randomUUID(),
+            drawingId,
+            startFrame: st.project.currentFrame,
+            duration: 1,
+          });
+          cells.sort((a, b) => a.startFrame - b.startFrame);
+        }
+        return { ...l, cells };
+      });
+      return {
+        project: {
+          ...st.project,
+          layers,
+          drawings: {
+            ...st.project.drawings,
+            [drawingId]: {
+              id: drawingId,
+              name: "Imagen importada",
+              dataUrl: finalDataUrl,
+              width: st.project.settings.width,
+              height: st.project.settings.height,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+          dirty: true,
+          updatedAt: now,
+        },
+        imagePlacement: null,
+      };
+    });
+
+    // Registrar en el stack de undo
+    if (prevDataUrl && prevDataUrl !== finalDataUrl) {
+      get().pushHistory(drawingId, prevDataUrl, finalDataUrl);
+    }
+  },
+
+  cancelImagePlacement: () => {
+    set({ imagePlacement: null });
+  },
 
   triggerAutosave: async () => {
     const s = get();

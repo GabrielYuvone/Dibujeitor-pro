@@ -6,6 +6,18 @@ import { COMMON_FPS, RESOLUTIONS } from "@/lib/animation/defaults";
 import { ChevronUp, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+// Presets de color de fondo, incluyendo chroma key estándar
+const BG_PRESETS: { color: string; label: string }[] = [
+  { color: "#ffffff", label: "Blanco" },
+  { color: "#000000", label: "Negro" },
+  // Chroma key estándar de la industria
+  { color: "#00b140", label: "Verde chroma key (#00b140)" },
+  { color: "#004098", label: "Azul chroma key (#004098)" },
+  { color: "#00ff00", label: "Verde puro (#00ff00)" },
+  { color: "#0000ff", label: "Azul puro (#0000ff)" },
+  { color: "#ff00ff", label: "Magenta (chroma alternativo)" },
+];
+
 export function PropertiesPanel() {
   const project = useStore((s) => s.project);
   const setProjectSettings = useStore((s) => s.setProjectSettings);
@@ -95,6 +107,21 @@ export function PropertiesPanel() {
               className="flex-1 px-2 py-1 text-xs bg-background border border-border rounded font-mono"
             />
           </div>
+          {/* Presets para chroma key y comunes */}
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {BG_PRESETS.map((p) => (
+              <button
+                key={p.color}
+                title={p.label}
+                onClick={() => setProjectSettings({ bgColor: p.color })}
+                className="w-6 h-6 rounded border border-border hover:scale-110 transition-transform"
+                style={{ backgroundColor: p.color }}
+              />
+            ))}
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-1">
+            Verde y azul: para chroma key (composición)
+          </p>
         </Field>
       </Section>
 
