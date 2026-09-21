@@ -102,7 +102,7 @@ interface AppState {
   togglePlay: () => void;
   setPlaying: (p: boolean) => void;
   setLooping: (l: boolean) => void;
-  setSpeed: (s: number) => void;
+  setPlaybackFps: (fps: number) => void;
   setRange: (start: number | null, end: number | null) => void;
 
   // Canvas view
@@ -363,7 +363,7 @@ export const useStore = create<AppState>((set, get) => ({
   togglePlay: () => set((s) => ({ playback: { ...s.playback, playing: !s.playback.playing } })),
   setPlaying: (p) => set((s) => ({ playback: { ...s.playback, playing: p } })),
   setLooping: (l) => set((s) => ({ playback: { ...s.playback, looping: l } })),
-  setSpeed: (sp) => set((s) => ({ playback: { ...s.playback, speed: sp } })),
+  setPlaybackFps: (fps) => set((s) => ({ playback: { ...s.playback, playbackFps: Math.max(1, fps) } })),
   setRange: (start, end) =>
     set((s) => ({ playback: { ...s.playback, rangeStart: start, rangeEnd: end } })),
 

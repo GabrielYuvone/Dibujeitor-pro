@@ -899,8 +899,8 @@ export function usePlaybackEngine() {
       return;
     }
 
-    const fps = project.settings.fps;
-    const speed = playback.speed;
+    // Usar playbackFps del store (default 6 FPS)
+    const playbackFps = playback.playbackFps || 6;
     const total = totalFrames(project.layers);
     const rangeStart = playback.rangeStart ?? 0;
     const rangeEnd = playback.rangeEnd ?? Math.max(1, total);
@@ -911,7 +911,7 @@ export function usePlaybackEngine() {
     const loop = (time: number) => {
       const dt = time - lastTimeRef.current;
       lastTimeRef.current = time;
-      const framesPerMs = (fps * speed) / 1000;
+      const framesPerMs = playbackFps / 1000;
       frameAccumRef.current += dt * framesPerMs;
 
       while (frameAccumRef.current >= 1) {

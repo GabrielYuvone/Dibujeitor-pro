@@ -26,7 +26,7 @@ export function Timeline() {
   const playback = useStore((s) => s.playback);
   const togglePlay = useStore((s) => s.togglePlay);
   const setLooping = useStore((s) => s.setLooping);
-  const setSpeed = useStore((s) => s.setSpeed);
+  const setPlaybackFps = useStore((s) => s.setPlaybackFps);
   const gotoFrame = useStore((s) => s.gotoFrame);
   const nextFrame = useStore((s) => s.nextFrame);
   const prevFrame = useStore((s) => s.prevFrame);
@@ -166,15 +166,18 @@ export function Timeline() {
         <div className="flex items-center gap-2 text-xs">
           <label className="text-muted-foreground">Velocidad:</label>
           <select
-            value={playback.speed}
-            onChange={(e) => setSpeed(Number(e.target.value))}
+            value={playback.playbackFps}
+            onChange={(e) => setPlaybackFps(Number(e.target.value))}
             className="bg-background border border-border rounded px-1 py-0.5 text-xs"
           >
-            <option value={0.25}>0.25×</option>
-            <option value={0.5}>0.5×</option>
-            <option value={1}>1×</option>
-            <option value={1.5}>1.5×</option>
-            <option value={2}>2×</option>
+            <option value={1}>1 FPS</option>
+            <option value={2}>2 FPS</option>
+            <option value={3}>3 FPS</option>
+            <option value={6}>6 FPS</option>
+            <option value={12}>12 FPS</option>
+            <option value={24}>24 FPS</option>
+            <option value={30}>30 FPS</option>
+            <option value={60}>60 FPS</option>
           </select>
         </div>
 
