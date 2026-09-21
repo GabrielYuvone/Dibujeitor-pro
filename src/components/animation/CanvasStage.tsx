@@ -510,18 +510,41 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   }, [brush.size, brush.color, canvasView.zoom, currentTool, xModifier]);
 
   // Listener global pointerup para resetear el estado interno "pointer down"
-  // del canvas (se usa para ocultar el cursor mientras se dibuja).
+  // del canvas y volver a mostrar el cursor del pincel.
   useEffect(() => {
     const onUp = () => {
       isPointerDownRef.current = false;
+      // Restaurar cursor del pincel al soltar
+      const el = brushCursorRef.current;
+      if (el && showsBrushCursor) {
+        el.style.opacity = "0.8";
+      }
+    };
+    // Listener global pointermove para actualizar posición del cursor
+    // incluso durante el dibujo (los eventos los captura el div interno)
+    const onMove = (e: PointerEvent) => {
+      const el = brushCursorRef.current;
+      if (!el || !showsBrushCursor) return;
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      el.style.left = `${e.clientX - rect.left}px`;
+      el.style.top = `${e.clientY - rect.top}px`;
+      // Si está dibujando, ocultar completamente el cursor
+      if (isPointerDownRef.current) {
+        el.style.opacity = "0";
+      } else {
+        el.style.opacity = "0.8";
+      }
     };
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
+    window.addEventListener("pointermove", onMove);
     return () => {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("pointermove", onMove);
     };
-  }, []);
+  }, [showsBrushCursor]);
 
   if (!project) return null;
 
@@ -544,18 +567,6 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
         touchAction: "none",
       }}
       onWheel={(e) => engine.handleWheel(e as unknown as WheelEvent)}
-      onMouseMove={(e) => {
-        // Actualizar la posición del cursor de pincel si está visible
-        const el = brushCursorRef.current;
-        if (el && showsBrushCursor) {
-          const rect = containerRef.current?.getBoundingClientRect();
-          if (rect) {
-            el.style.left = `${e.clientX - rect.left}px`;
-            el.style.top = `${e.clientY - rect.top}px`;
-            el.style.opacity = isPointerDownRef.current ? "0.3" : "0.8";
-          }
-        }
-      }}
     >
       <div
         className="absolute"
@@ -572,6 +583,9 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
         }}
         onPointerDown={(e) => {
           isPointerDownRef.current = true;
+          // Ocultar cursor del pincel inmediatamente al empezar a dibujar
+          const el = brushCursorRef.current;
+          if (el) el.style.opacity = "0";
           // Si hay un placement activo, interceptar el evento
           if (imagePlacement && handlePlacementPointerDown(e)) {
             e.stopPropagation();
