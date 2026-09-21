@@ -88,10 +88,12 @@ export function ProjectManager() {
         <header className="mb-8 flex flex-col items-center text-center">
           <img
             src="/logointro.png"
-            alt="Animación Tradicional 2D — Escuela de Animación"
+            alt="DIBUJEITOR PRO — Escuela Para Animadores de Rosario"
             className="max-w-2xl w-full h-auto mb-4 object-contain"
             style={{ maxHeight: "320px" }}
           />
+          <h1 className="text-2xl font-bold tracking-tight mb-1">DIBUJEITOR PRO</h1>
+          <p className="text-sm text-muted-foreground mb-2">Escuela Para Animadores de Rosario</p>
           <p className="text-muted-foreground max-w-2xl">
             Software de animación cuadro a cuadro para la escuela de animación.
             Dibujo, capas, línea de tiempo, onion skin, audio y exportación a MP4, WebM, GIF y secuencias PNG.

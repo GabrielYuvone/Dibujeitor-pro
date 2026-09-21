@@ -34,7 +34,7 @@ async function composeFrameToImageData(
     if (!layer.visible) continue;
     if (layer.type === "audio") continue;
     if (layer.locked && !includeOnion) continue;
-    const cell = findCellAtFrame(layer.cells, frame);
+    const cell = findCellAtFrame(layer.cells, frame, layer.loopRange);
     if (!cell || !cell.drawingId) continue;
     const drawing = project.drawings[cell.drawingId];
     if (!drawing) continue;

@@ -47,7 +47,7 @@ async function renderFrameToBlob(
   // Asegurar que todas las imágenes estén cacheadas
   for (const layer of project.layers) {
     if (layer.type === "audio") continue;
-    const cell = findCellAtFrame(layer.cells, frame);
+    const cell = findCellAtFrame(layer.cells, frame, layer.loopRange);
     if (cell?.drawingId) {
       const d = project.drawings[cell.drawingId];
       if (d) await preloadImage(cell.drawingId, d.dataUrl);
@@ -66,7 +66,7 @@ async function renderFrameToBlob(
   // Componer capas
   for (const layer of project.layers) {
     if (!layer.visible || layer.type === "audio") continue;
-    const cell = findCellAtFrame(layer.cells, frame);
+    const cell = findCellAtFrame(layer.cells, frame, layer.loopRange);
     if (!cell || !cell.drawingId) continue;
     const img = getCachedImage(cell.drawingId);
     if (img && img.complete && img.naturalWidth > 0) {
@@ -266,7 +266,7 @@ export async function exportWebM(
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     for (const layer of project.layers) {
       if (!layer.visible || layer.type === "audio") continue;
-      const cell = findCellAtFrame(layer.cells, frame);
+      const cell = findCellAtFrame(layer.cells, frame, layer.loopRange);
       if (!cell || !cell.drawingId) continue;
       const img = getCachedImage(cell.drawingId);
       if (img && img.complete && img.naturalWidth > 0) {

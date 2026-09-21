@@ -253,6 +253,102 @@ export function drawInkDab(
   ctx.fill();
 }
 
+/**
+ * Dibuja un segmento de trazo con acuarela.
+ *
+ * La acuarela simula pintura acuosa: cada segmento agrega varios dabs
+ * translúcidos que se acumulan. Hay variación en opacidad y tamaño para
+ * simular el flujo irregular del agua. El color se oscurece levemente
+ * donde se acumula (efecto "wet edge").
+ */
+export function drawWatercolorSegment(
+  ctx: CanvasRenderingContext2D,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  baseSize: number,
+  baseColor: string,
+  baseAlpha: number,
+  pressure = 1
+) {
+  // La acuarela tiene flujo variable y dabs múltiples translúcidos
+  const flow = 0.4 + Math.random() * 0.4;
+  const size = baseSize * (0.8 + Math.random() * 0.5) * pressure;
+  const alpha = baseAlpha * flow * 0.35; // Muy translúcido para acumular
+
+  ctx.strokeStyle = baseColor;
+  ctx.fillStyle = baseColor;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.globalCompositeOperation = "source-over";
+
+  // Trazo principal suave
+  ctx.globalAlpha = alpha;
+  ctx.lineWidth = Math.max(0.5, size);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  // Dabs adicionales translúcidos alrededor del segmento
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const steps = Math.max(1, Math.floor(dist / (size * 0.3)));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const cx = x1 + dx * t;
+    const cy = y1 + dy * t;
+    // Variación radial
+    const angle = Math.random() * Math.PI * 2;
+    const r = Math.random() * size * 0.4;
+    const px = cx + Math.cos(angle) * r;
+    const py = cy + Math.sin(angle) * r;
+    const dabSize = size * (0.3 + Math.random() * 0.4);
+    ctx.globalAlpha = alpha * (0.5 + Math.random() * 0.5);
+    ctx.beginPath();
+    ctx.arc(px, py, Math.max(0.3, dabSize / 2), 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/**
+ * Dibuja un punto inicial de acuarela. Crea un parche suave
+ * translúcido sobre el que se acumularán los segmentos siguientes.
+ */
+export function drawWatercolorDab(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  baseSize: number,
+  baseColor: string,
+  baseAlpha: number,
+  pressure = 1
+) {
+  const flow = 0.5 + Math.random() * 0.3;
+  const size = baseSize * (0.8 + Math.random() * 0.4) * pressure;
+  const alpha = baseAlpha * flow * 0.4;
+
+  ctx.fillStyle = baseColor;
+  ctx.globalAlpha = alpha;
+  ctx.globalCompositeOperation = "source-over";
+
+  // Varios dabs translúcidos para crear el efecto acuoso
+  const count = Math.max(3, Math.floor(size * 0.5));
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const r = Math.random() * size * 0.5;
+    const px = x + Math.cos(angle) * r;
+    const py = y + Math.sin(angle) * r;
+    const s = size * (0.3 + Math.random() * 0.4);
+    ctx.globalAlpha = alpha * (0.4 + Math.random() * 0.6);
+    ctx.beginPath();
+    ctx.arc(px, py, Math.max(0.3, s / 2), 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Conversión de coordenadas de pantalla a coordenadas del lienzo
 // ---------------------------------------------------------------------------
@@ -363,6 +459,10 @@ export function strokeEllipse(
 /**
  * Flood fill sobre ImageData con tolerancia de color.
  * Implementación con pila (stack) para evitar desbordamiento.
+ *
+ * La tolerancia se compara usando la distancia euclidiana en RGB
+ * (sin incluir alfa), y el umbral se limita a un máximo de 200 para
+ * evitar inundaciones demasiado agresivas.
  */
 export function floodFill(
   imageData: ImageData,
@@ -372,6 +472,12 @@ export function floodFill(
   tolerance = 32
 ) {
   const { width, height, data } = imageData;
+  // Limitar la tolerancia a un máximo de 200
+  const tol = Math.min(200, Math.max(0, tolerance));
+  // Umbral euclidiano en RGB (3 componentes, raíz de 3 * tol²)
+  const euclidThreshold = Math.sqrt(3) * tol;
+  const euclidThresholdSq = euclidThreshold * euclidThreshold;
+
   startX = Math.floor(startX);
   startY = Math.floor(startY);
   if (startX < 0 || startX >= width || startY < 0 || startY >= height) return;
@@ -404,14 +510,14 @@ export function floodFill(
     const r = data[idx];
     const g = data[idx + 1];
     const b = data[idx + 2];
-    const a = data[idx + 3];
+    // No usamos alpha en la comparación: solo RGB
 
-    // Tolerancia
+    // Distancia euclidiana en RGB
     const dr = r - sr;
     const dg = g - sg;
     const db = b - sb;
-    const da = a - sa;
-    if (Math.abs(dr) > tolerance || Math.abs(dg) > tolerance || Math.abs(db) > tolerance || Math.abs(da) > tolerance) {
+    const distSq = dr * dr + dg * dg + db * db;
+    if (distSq > euclidThresholdSq) {
       continue;
     }
 

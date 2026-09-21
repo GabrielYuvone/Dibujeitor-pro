@@ -16,6 +16,7 @@ import {
   ZoomIn,
   Pipette,
   Pen,
+  Droplets,
   Keyboard,
   Info,
   Lightbulb,
@@ -32,6 +33,7 @@ const SHORTCUTS: ShortcutDef[] = [
   { keys: "P", description: "Lápiz (textura de grafito)", category: "Herramientas" },
   { keys: "B", description: "Pincel (trazo suave)", category: "Herramientas" },
   { keys: "K", description: "Pluma de tinta (flujo irregular)", category: "Herramientas" },
+  { keys: "W", description: "Acuarela (trazo translúcido acumulativo)", category: "Herramientas" },
   { keys: "E", description: "Goma de borrar", category: "Herramientas" },
   { keys: "L", description: "Línea recta", category: "Herramientas" },
   { keys: "R", description: "Rectángulo", category: "Herramientas" },
@@ -60,6 +62,9 @@ const SHORTCUTS: ShortcutDef[] = [
   // Vista
   { keys: "F1", description: "Lienzo a pantalla completa (toggle) — se puede seguir dibujando", category: "Vista" },
   { keys: "Z (mantener)", description: "Modo zoom temporal: arrastrá arriba/abajo o usá la rueda", category: "Vista" },
+  { keys: "X (mantener)", description: "Modo goma temporal: convertí cualquier trazo en borrado", category: "Vista" },
+  { keys: "C (mantener)", description: "Modo pan temporal: arrastrá el lienzo", category: "Vista" },
+  { keys: "Ctrl (mantener)", description: "Modo resize brush: arrastrá arriba/abajo para cambiar tamaño", category: "Vista" },
   { keys: "Rueda mouse", description: "Zoom in/out (también con Z apretado)", category: "Vista" },
 
   // Reproducción
@@ -154,6 +159,7 @@ export function HelpPanel() {
           <ToolSummary icon={<Pencil size={14} />} name="Lápiz" desc="Grafito seco, presión variable" />
           <ToolSummary icon={<Brush size={14} />} name="Pincel" desc="Trazo suave y redondo" />
           <ToolSummary icon={<Pen size={14} />} name="Tinta" desc="Flujo irregular con salpicaduras" />
+          <ToolSummary icon={<Droplets size={14} />} name="Acuarela" desc="Trazo translúcido acumulativo" />
           <ToolSummary icon={<Eraser size={14} />} name="Goma" desc="Borra con presión" />
           <ToolSummary icon={<Slash size={14} />} name="Línea" desc="Línea recta perfecta" />
           <ToolSummary icon={<Square size={14} />} name="Rectángulo" desc="Contorno rectangular" />

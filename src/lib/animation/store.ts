@@ -65,6 +65,14 @@ interface AppState {
   isAutosaving: boolean;
   lastAutosaveAt: number | null;
 
+  // Estado de dibujo y modificadores de teclado
+  isDrawing: boolean;
+  rightPanelVisible: boolean;
+  xModifier: boolean;
+  zModifier: boolean;
+  toolSettings: Record<string, Partial<BrushSettings>>;
+  customPalette: string[];
+
   // Selección temporal (texto activo)
   drawingBuffer: HTMLCanvasElement | null;
 
@@ -129,6 +137,7 @@ interface AppState {
   setLayerOpacity: (id: ID, opacity: number) => void;
   moveLayer: (id: ID, dir: "up" | "down") => void;
   duplicateLayer: (id: ID) => void;
+  setLayerLoop: (id: ID, range: { start: number; end: number; count: number } | null) => void;
 
   // Cells / drawings
   ensureDrawingForCell: (layerId: ID, frame: number) => Promise<ID>;
@@ -188,6 +197,9 @@ interface AppState {
   toggleSafeArea: () => void;
   toggleRulers: () => void;
   setDrawingBuffer: (c: HTMLCanvasElement | null) => void;
+  setRightPanelVisible: (v: boolean) => void;
+  saveCustomPalette: (palette: string[]) => void;
+  loadCustomPalette: () => string[];
 
   // Undo / Redo multinivel
   pushHistory: (drawingId: ID, prevDataUrl: string, newDataUrl: string) => void;
@@ -259,6 +271,7 @@ export const useStore = create<AppState>((set, get) => ({
     playing: false,
     looping: true,
     speed: 1,
+    playbackFps: 6,
     rangeStart: null,
     rangeEnd: null,
   },
@@ -284,6 +297,13 @@ export const useStore = create<AppState>((set, get) => ({
   isAutosaving: false,
   lastAutosaveAt: null,
   drawingBuffer: null,
+  // Estado de dibujo y modificadores de teclado (no persistidos)
+  isDrawing: false,
+  rightPanelVisible: true,
+  xModifier: false,
+  zModifier: false,
+  toolSettings: {} as Record<string, Partial<BrushSettings>>,
+  customPalette: [] as string[],
   // Pilas de undo/redo (no persistidas)
   undoStack: [] as HistoryEntry[],
   redoStack: [] as HistoryEntry[],
@@ -355,7 +375,29 @@ export const useStore = create<AppState>((set, get) => ({
   // Tools
   // -------------------------------------------------------------------------
 
-  setTool: (tool) => set({ currentTool: tool }),
+  setTool: (tool) => {
+    set((s) => {
+      // Guardar la configuración actual del pincel para la herramienta actual
+      // y restaurar la configuración guardada para la nueva herramienta.
+      const prevTool = s.currentTool;
+      const toolSettings = { ...s.toolSettings };
+      // Guardar settings relevantes (size, opacity, color, hardness, etc.)
+      toolSettings[prevTool] = {
+        size: s.brush.size,
+        color: s.brush.color,
+        opacity: s.brush.opacity,
+        hardness: s.brush.hardness,
+        smoothing: s.brush.smoothing,
+        fillTolerance: s.brush.fillTolerance,
+      };
+      // Restaurar settings de la nueva herramienta (si existen)
+      const restored = toolSettings[tool];
+      const newBrush = restored
+        ? { ...s.brush, ...restored }
+        : s.brush;
+      return { currentTool: tool, toolSettings, brush: newBrush };
+    });
+  },
   setBrush: (b) => set((s) => ({ brush: { ...s.brush, ...b } })),
 
   setOnion: (o) => set((s) => ({ onion: { ...s.onion, ...o } })),
@@ -524,6 +566,15 @@ export const useStore = create<AppState>((set, get) => ({
       layers.splice(idx + 1, 0, newLayer);
       return { ...p, layers, currentLayerId: newId };
     }));
+  },
+
+  setLayerLoop: (id, range) => {
+    const state = get();
+    if (!state.project) return;
+    set(updateProject(state, (p) => ({
+      ...p,
+      layers: p.layers.map((l) => (l.id === id ? { ...l, loopRange: range } : l)),
+    })));
   },
 
   // -------------------------------------------------------------------------
@@ -1084,6 +1135,29 @@ export const useStore = create<AppState>((set, get) => ({
   toggleSafeArea: () => set((s) => ({ showSafeArea: !s.showSafeArea })),
   toggleRulers: () => set((s) => ({ showRulers: !s.showRulers })),
   setDrawingBuffer: (c) => set({ drawingBuffer: c }),
+  setRightPanelVisible: (v) => set({ rightPanelVisible: v }),
+  saveCustomPalette: (palette) => {
+    set({ customPalette: palette });
+    try {
+      localStorage.setItem("dibujeitor:customPalette", JSON.stringify(palette));
+    } catch (e) {
+      console.warn("No se pudo guardar la paleta:", e);
+    }
+  },
+  loadCustomPalette: () => {
+    try {
+      const raw = localStorage.getItem("dibujeitor:customPalette");
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        set({ customPalette: parsed });
+        return parsed as string[];
+      }
+    } catch (e) {
+      console.warn("No se pudo cargar la paleta:", e);
+    }
+    return [];
+  },
 
   // -------------------------------------------------------------------------
   // Undo / Redo multinivel

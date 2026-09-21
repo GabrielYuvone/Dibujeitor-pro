@@ -18,8 +18,11 @@ import {
   Music,
   Layers as LayersIcon,
   Square as SquareIcon,
+  Repeat,
+  ChevronRight,
 } from "lucide-react";
 import type { LayerType } from "@/lib/animation/types";
+import { useState } from "react";
 
 export function LayersPanel() {
   const project = useStore((s) => s.project);
@@ -32,6 +35,8 @@ export function LayersPanel() {
   const setLayerOpacity = useStore((s) => s.setLayerOpacity);
   const moveLayer = useStore((s) => s.moveLayer);
   const duplicateLayer = useStore((s) => s.duplicateLayer);
+  const setLayerLoop = useStore((s) => s.setLayerLoop);
+  const [expandedLoop, setExpandedLoop] = useState<string | null>(null);
 
   if (!project) return null;
 
@@ -64,7 +69,7 @@ export function LayersPanel() {
             title="Nueva capa de dibujo"
             onClick={() => addLayer("draw")}
           >
-            <Plus size={12} /> Dibujo
+            <Plus size={12} /> Capa
           </Button>
         </div>
       </div>
@@ -104,11 +109,12 @@ export function LayersPanel() {
         {orderedLayers.map((layer) => (
           <div
             key={layer.id}
-            className={`flex items-center gap-1 p-2 border-b border-border text-xs cursor-pointer hover:bg-muted/50 ${
+            className={`border-b border-border text-xs cursor-pointer hover:bg-muted/50 ${
               project.currentLayerId === layer.id ? "bg-primary/20" : ""
             }`}
             onClick={() => selectLayer(layer.id)}
           >
+            <div className="flex items-center gap-1 p-2">
             <button
               className={`p-1.5 rounded transition-colors ${
                 layer.visible
@@ -145,6 +151,20 @@ export function LayersPanel() {
               onClick={(e) => e.stopPropagation()}
             />
             <div className="flex items-center gap-1">
+              <button
+                className={`p-1 rounded transition-colors ${
+                  layer.loopRange
+                    ? "bg-primary/30 text-primary hover:bg-primary/40"
+                    : "hover:bg-muted text-muted-foreground"
+                }`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpandedLoop(expandedLoop === layer.id ? null : layer.id);
+                }}
+                title="Configurar bucle de la capa"
+              >
+                <Repeat size={14} />
+              </button>
               <button
                 className="p-1 rounded hover:bg-muted"
                 onClick={(e) => {
@@ -189,6 +209,61 @@ export function LayersPanel() {
                 <Trash2 size={14} />
               </button>
             </div>
+            </div>
+            {/* Panel expandible para configurar el bucle de la capa */}
+            {expandedLoop === layer.id && (
+              <div className="flex items-center gap-2 p-2 border-t border-border bg-muted/20 text-xs">
+                <ChevronRight size={12} className="text-muted-foreground" />
+                <label className="text-muted-foreground">Inicio</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={layer.loopRange?.start ?? 0}
+                  onChange={(e) => {
+                    const start = Number(e.target.value) || 0;
+                    const cur = layer.loopRange ?? { start: 0, end: 1, count: 0 };
+                    setLayerLoop(layer.id, { ...cur, start });
+                  }}
+                  className="w-12 px-1 py-0.5 bg-background border border-border rounded"
+                />
+                <label className="text-muted-foreground">Fin</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={layer.loopRange?.end ?? 1}
+                  onChange={(e) => {
+                    const end = Number(e.target.value) || 1;
+                    const cur = layer.loopRange ?? { start: 0, end: 1, count: 0 };
+                    setLayerLoop(layer.id, { ...cur, end });
+                  }}
+                  className="w-12 px-1 py-0.5 bg-background border border-border rounded"
+                />
+                <label className="text-muted-foreground">#veces</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={layer.loopRange?.count ?? 0}
+                  onChange={(e) => {
+                    const count = Math.max(0, Number(e.target.value) || 0);
+                    const cur = layer.loopRange ?? { start: 0, end: 1, count: 0 };
+                    setLayerLoop(layer.id, { ...cur, count });
+                  }}
+                  className="w-12 px-1 py-0.5 bg-background border border-border rounded"
+                  title="0 = infinito"
+                />
+                <button
+                  className="ml-auto px-2 py-0.5 bg-destructive/20 text-destructive hover:bg-destructive/30 rounded text-[10px]"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setLayerLoop(layer.id, null);
+                    setExpandedLoop(null);
+                  }}
+                  title="Quitar bucle"
+                >
+                  Quitar
+                </button>
+              </div>
+            )}
           </div>
         ))}
       </div>

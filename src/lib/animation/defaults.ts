@@ -26,6 +26,7 @@ export const DEFAULT_BRUSH: BrushSettings = {
   cap: "round",
   join: "round",
   eraserMode: "solid",
+  fillTolerance: 32,
 };
 
 export const DEFAULT_ONION: OnionSkinSettings = {

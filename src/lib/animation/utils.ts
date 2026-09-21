@@ -47,8 +47,24 @@ export function totalFrames(layers: { cells: { startFrame: number; duration: num
 /** Devuelve el drawing activo para una capa en un frame dado. */
 export function findCellAtFrame(
   cells: { startFrame: number; duration: number; drawingId: string | null }[],
-  frame: number
+  frame: number,
+  loopRange?: { start: number; end: number; count: number } | null
 ): { startFrame: number; duration: number; drawingId: string | null } | null {
+  // Si la capa define un rango de bucle, mapear el frame pedido a un frame
+  // dentro del rango (repitiendo el rango `count` veces o indefinidamente
+  // cuando count = 0). Esto reproduce el comportamiento de "loop" de capas
+  // para ciclos de caminata, etc.
+  if (loopRange && loopRange.end > loopRange.start) {
+    const rangeLen = loopRange.end - loopRange.start;
+    if (frame >= loopRange.start) {
+      const offset = frame - loopRange.start;
+      const limit = loopRange.count > 0 ? loopRange.count * rangeLen : Infinity;
+      if (offset < limit) {
+        const loopedOffset = offset % rangeLen;
+        frame = loopRange.start + loopedOffset;
+      }
+    }
+  }
   for (let i = cells.length - 1; i >= 0; i--) {
     const c = cells[i];
     if (frame >= c.startFrame && frame < c.startFrame + c.duration) {

@@ -179,6 +179,20 @@ export function Timeline() {
             <option value={30}>30 FPS</option>
             <option value={60}>60 FPS</option>
           </select>
+          {/* Input numérico para FPS personalizado */}
+          <input
+            type="number"
+            min={1}
+            max={120}
+            value={playback.playbackFps}
+            onChange={(e) => {
+              const f = Number(e.target.value);
+              if (!Number.isNaN(f) && f > 0) setPlaybackFps(f);
+            }}
+            className="w-12 px-1 py-0.5 bg-background border border-border rounded text-xs"
+            title="FPS personalizado"
+          />
+          <span className="text-muted-foreground">FPS</span>
         </div>
 
         <div className="ml-auto flex items-center gap-3 text-xs">

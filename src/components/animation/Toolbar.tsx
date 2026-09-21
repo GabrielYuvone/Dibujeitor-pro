@@ -8,6 +8,7 @@ import {
   Pencil,
   Brush,
   Pen,
+  Droplets,
   Eraser,
   Slash,
   Square,
@@ -33,6 +34,7 @@ const TOOLS: ToolDef[] = [
   { id: "pencil", label: "Lápiz", icon: <Pencil size={16} />, shortcut: "P" },
   { id: "brush", label: "Pincel", icon: <Brush size={16} />, shortcut: "B" },
   { id: "ink", label: "Pluma tinta", icon: <Pen size={16} />, shortcut: "K" },
+  { id: "watercolor", label: "Acuarela", icon: <Droplets size={16} />, shortcut: "W" },
   { id: "eraser", label: "Goma", icon: <Eraser size={16} />, shortcut: "E" },
   { id: "line", label: "Línea", icon: <Slash size={16} />, shortcut: "L" },
   { id: "rectangle", label: "Rectángulo", icon: <Square size={16} />, shortcut: "R" },
@@ -51,6 +53,9 @@ export function Toolbar() {
   const brush = useStore((s) => s.brush);
   const setBrush = useStore((s) => s.setBrush);
   const project = useStore((s) => s.project);
+  const saveCustomPalette = useStore((s) => s.saveCustomPalette);
+  const loadCustomPalette = useStore((s) => s.loadCustomPalette);
+  const customPalette = useStore((s) => s.customPalette);
 
   if (!project) return null;
 
@@ -113,6 +118,62 @@ export function Toolbar() {
             />
           ))}
         </div>
+        {/* Paleta personalizada guardada por el usuario */}
+        {customPalette.length > 0 && (
+          <div className="mt-2">
+            <div className="text-[10px] uppercase text-muted-foreground mb-1">Paleta guardada</div>
+            <div className="grid grid-cols-6 gap-1">
+              {customPalette.map((color, i) => (
+                <button
+                  key={`${color}-${i}`}
+                  onClick={() => setBrush({ color })}
+                  title={color}
+                  className="w-6 h-6 rounded border border-border hover:scale-110 transition-transform"
+                  style={{ backgroundColor: color }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+        {/* Botones para guardar/cargar la paleta personalizada */}
+        <div className="flex gap-1 mt-2">
+          <button
+            className="flex-1 px-2 py-1 text-[10px] bg-muted hover:bg-muted-foreground/20 rounded"
+            onClick={() => {
+              // Guardar el color actual como parte de la paleta personalizada (máx 30)
+              const next = [...customPalette];
+              if (!next.includes(brush.color)) next.push(brush.color);
+              saveCustomPalette(next.slice(-30));
+            }}
+            title="Guardar el color actual en la paleta personalizada (persiste en localStorage)"
+          >
+            Guardar paleta
+          </button>
+          <button
+            className="flex-1 px-2 py-1 text-[10px] bg-muted hover:bg-muted-foreground/20 rounded"
+            onClick={() => loadCustomPalette()}
+            title="Recargar la paleta personalizada desde localStorage"
+          >
+            Cargar paleta
+          </button>
+        </div>
+      </div>
+
+      {/* Tolerancia de relleno (solo relevante para el bote de tinta) */}
+      <div>
+        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex justify-between">
+          <span>Tolerancia relleno</span>
+          <span className="text-foreground">{Math.round(brush.fillTolerance)}</span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={brush.fillTolerance}
+          onChange={(e) => setBrush({ fillTolerance: Number(e.target.value) })}
+          className="w-full"
+        />
       </div>
 
       {/* Tamaño del pincel */}

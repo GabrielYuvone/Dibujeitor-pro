@@ -1,0 +1,980 @@
+     1→// ============================================================================
+     2→// useDrawingEngine.ts — Motor de dibujo y reproducción
+     3→// ============================================================================
+     4→// REFACTORIZADO: usa window listeners (no React pointer events) para
+     5→// evitar el bug de "solo el primer punto" causado por awaits async en
+     6→// handlePointerDown. También pre-cacha imágenes para render síncrono y
+     7→// eliminar el parpadeo durante el playback.
+     8→
+     9→"use client";
+    10→
+    11→import { useCallback, useEffect, useRef } from "react";
+    12→import { useStore } from "./store";
+    13→import {
+    14→  configureEraser,
+    15→  configurePencil,
+    16→  configureStroke,
+    17→  createSmoother,
+    18→  drawInkDab,
+    19→  drawInkSegment,
+    20→  drawPencilDab,
+    21→  floodFill,
+    22→  hexToRgb,
+    23→  screenToCanvas,
+    24→  smoothPoint,
+    25→  strokeEllipse,
+    26→  strokeRectangle,
+    27→  strokeLine,
+    28→  type StrokeSmoother,
+    29→  dataUrlToImageData,
+    30→} from "./drawing";
+    31→import type { ToolId } from "./types";
+    32→import { genId, totalFrames } from "./utils";
+    33→
+    34→interface DrawingEngineState {
+    35→  drawingCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+    36→  overlayCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+    37→  containerRef: React.RefObject<HTMLDivElement | null>;
+    38→}
+    39→
+    40→// ---------------------------------------------------------------------------
+    41→// Cache global de imágenes: drawingId → Image (cargada)
+    42→// ---------------------------------------------------------------------------
+    43→
+    44→const imageCache = new Map<string, HTMLImageElement>();
+    45→
+    46→/** Obtiene una Image ya cargada (o null si no está cargada). */
+    47→export function getCachedImage(drawingId: string): HTMLImageElement | null {
+    48→  return imageCache.get(drawingId) ?? null;
+    49→}
+    50→
+    51→/** Carga (o recarga) una Image en la cache. */
+    52→export function preloadImage(drawingId: string, dataUrl: string): Promise<HTMLImageElement> {
+    53→  return new Promise((resolve) => {
+    54→    const existing = imageCache.get(drawingId);
+    55→    if (existing && existing.dataset.dataUrl === dataUrl) {
+    56→      resolve(existing);
+    57→      return;
+    58→    }
+    59→    const img = new Image();
+    60→    img.dataset.dataUrl = dataUrl;
+    61→    img.onload = () => {
+    62→      imageCache.set(drawingId, img);
+    63→      resolve(img);
+    64→    };
+    65→    img.onerror = () => {
+    66→      // Aún así guardamos para no reintentar infinitamente
+    67→      imageCache.set(drawingId, img);
+    68→      resolve(img);
+    69→    };
+    70→    img.src = dataUrl;
+    71→  });
+    72→}
+    73→
+    74→// ---------------------------------------------------------------------------
+    75→// Hook principal
+    76→// ---------------------------------------------------------------------------
+    77→
+    78→export function useDrawingEngine({
+    79→  drawingCanvasRef,
+    80→  overlayCanvasRef,
+    81→  containerRef,
+    82→}: DrawingEngineState) {
+    83→  // Suscripciones selectivas para que los callbacks no se recreen demasiado
+    84→  const project = useStore((s) => s.project);
+    85→  const brush = useStore((s) => s.brush);
+    86→  const currentTool = useStore((s) => s.currentTool);
+    87→  const canvasView = useStore((s) => s.canvasView);
+    88→  const ensureDrawing = useStore((s) => s.ensureDrawingForCell);
+    89→  const updateDrawing = useStore((s) => s.updateDrawing);
+    90→  const setTool = useStore((s) => s.setTool);
+    91→  const gotoFrame = useStore((s) => s.gotoFrame);
+    92→  const nextFrame = useStore((s) => s.nextFrame);
+    93→  const prevFrame = useStore((s) => s.prevFrame);
+    94→  const setPlaying = useStore((s) => s.setPlaying);
+    95→  const setCanvasView = useStore((s) => s.setCanvasView);
+    96→  const updateButton = useStore((s) => s.updateButton);
+    97→  const setVariable = useStore((s) => s.setVariable);
+    98→
+    99→  // Refs de estado de dibujo (no provocan re-render)
+   100→  const isDrawingRef = useRef(false);
+   101→  const lastPosRef = useRef<{ x: number; y: number } | null>(null);
+   102→  const startPosRef = useRef<{ x: number; y: number } | null>(null);
+   103→  const smootherRef = useRef<StrokeSmoother>(createSmoother(0.35));
+   104→  const savedImageRef = useRef<ImageData | null>(null);
+   105→  const pressureRef = useRef<number>(1);
+   106→  const drawingIdRef = useRef<string | null>(null);
+   107→  const lastDrawCommitRef = useRef<number>(0);
+   108→  const activeToolRef = useRef<ToolId>(currentTool);
+   109→  const activeBrushRef = useRef(brush);
+   110→  const activeCanvasViewRef = useRef(canvasView);
+   111→  const activeProjectRef = useRef(project);
+   112→  const isPanningRef = useRef(false);
+   113→  const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+   114→  // Zoom por arrastre (modificador Z)
+   115→  const isZoomingRef = useRef(false);
+   116→  const zoomStartRef = useRef<{ y: number; zoom: number } | null>(null);
+   117→  // Modificador Z: mientras se mantiene Z apretado, el wheel y el drag
+   118→  // hacen zoom (arrastra hacia arriba = acerca, hacia abajo = aleja).
+   119→  const zModifierRef = useRef(false);
+   120→  // Refs para selección (definidos al inicio del hook)
+   121→  const selectionBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+   122→  const selectionImageRef = useRef<ImageData | null>(null);
+   123→
+   124→  // Listener para el modificador Z (keydown/keyup)
+   125→  useEffect(() => {
+   126→    const onDown = (e: KeyboardEvent) => {
+   127→      // No interferir con inputs
+   128→      const target = e.target as HTMLElement;
+   129→      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
+   130→        return;
+   131→      }
+   132→      if (e.key === "z" || e.key === "Z") {
+   133→        zModifierRef.current = true;
+   134→      }
+   135→    };
+   136→    const onUp = (e: KeyboardEvent) => {
+   137→      if (e.key === "z" || e.key === "Z") {
+   138→        zModifierRef.current = false;
+   139→        // Si estábamos paneando o zoomeando con Z, soltar
+   140→        if (isPanningRef.current) {
+   141→          isPanningRef.current = false;
+   142→          panStartRef.current = null;
+   143→        }
+   144→        if (isZoomingRef.current) {
+   145→          isZoomingRef.current = false;
+   146→          zoomStartRef.current = null;
+   147→        }
+   148→      }
+   149→    };
+   150→    window.addEventListener("keydown", onDown);
+   151→    window.addEventListener("keyup", onUp);
+   152→    return () => {
+   153→      window.removeEventListener("keydown", onDown);
+   154→      window.removeEventListener("keyup", onUp);
+   155→    };
+   156→  }, []);
+   157→
+   158→  // Mantener refs sincronizadas con el estado más reciente
+   159→  useEffect(() => {
+   160→    activeToolRef.current = currentTool;
+   161→  }, [currentTool]);
+   162→  useEffect(() => {
+   163→    activeBrushRef.current = brush;
+   164→    smootherRef.current = createSmoother(brush.smoothing);
+   165→  }, [brush]);
+   166→  useEffect(() => {
+   167→    activeCanvasViewRef.current = canvasView;
+   168→  }, [canvasView]);
+   169→  useEffect(() => {
+   170→    activeProjectRef.current = project;
+   171→    // Pre-cachear imágenes de todos los drawings
+   172→    if (project) {
+   173→      for (const [id, d] of Object.entries(project.drawings)) {
+   174→        preloadImage(id, d.dataUrl);
+   175→      }
+   176→    }
+   177→  }, [project]);
+   178→
+   179→  // ---------------------------------------------------------------------------
+   180→  // Helpers
+   181→  // ---------------------------------------------------------------------------
+   182→
+   183→  const getCanvasPoint = useCallback(
+   184→    (clientX: number, clientY: number): { x: number; y: number } | null => {
+   185→      const container = containerRef.current;
+   186→      const proj = activeProjectRef.current;
+   187→      if (!container || !proj) return null;
+   188→      const rect = container.getBoundingClientRect();
+   189→      return screenToCanvas(
+   190→        clientX,
+   191→        clientY,
+   192→        rect,
+   193→        activeCanvasViewRef.current,
+   194→        proj.settings.width,
+   195→        proj.settings.height
+   196→      );
+   197→    },
+   198→    [containerRef]
+   199→  );
+   200→
+   201→  const loadDrawingIntoCanvas = useCallback(
+   202→    async (drawingId: string | null) => {
+   203→      const canvas = drawingCanvasRef.current;
+   204→      const proj = activeProjectRef.current;
+   205→      if (!canvas || !proj) return;
+   206→      const ctx = canvas.getContext("2d");
+   207→      if (!ctx) return;
+   208→
+   209→      // Limpiar SIEMPRE antes de cargar
+   210→      ctx.clearRect(0, 0, canvas.width, canvas.height);
+   211→      ctx.globalAlpha = 1;
+   212→      ctx.globalCompositeOperation = "source-over";
+   213→
+   214→      if (!drawingId) {
+   215→        drawingIdRef.current = null;
+   216→        return;
+   217→      }
+   218→
+   219→      const drawing = proj.drawings[drawingId];
+   220→      if (!drawing) {
+   221→        drawingIdRef.current = null;
+   222→        return;
+   223→      }
+   224→
+   225→      drawingIdRef.current = drawingId;
+   226→
+   227→      // Intentar usar la imagen cacheada (síncrono) — pero SOLO si
+   228→      // coincide con el dataUrl actual (caso undo/redo: el cache puede
+   229→      // tener la versión previa que NO es la que queremos dibujar)
+   230→      const cached = getCachedImage(drawingId);
+   231→      if (
+   232→        cached &&
+   233→        cached.complete &&
+   234→        cached.naturalWidth > 0 &&
+   235→        cached.dataset.dataUrl === drawing.dataUrl
+   236→      ) {
+   237→        ctx.drawImage(cached, 0, 0, canvas.width, canvas.height);
+   238→        return;
+   239→      }
+   240→
+   241→      // Fallback async (y cachear para la próxima)
+   242→      try {
+   243→        await preloadImage(drawingId, drawing.dataUrl);
+   244→        const img = getCachedImage(drawingId);
+   245→        if (img && img.complete) {
+   246→          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+   247→        }
+   248→      } catch (e) {
+   249→        console.error("Error cargando dibujo:", e);
+   250→      }
+   251→    },
+   252→    [drawingCanvasRef]
+   253→  );
+   254→
+   255→  const commitDrawing = useCallback(async () => {
+   256→    const canvas = drawingCanvasRef.current;
+   257→    const drawingId = drawingIdRef.current;
+   258→    if (!canvas || !drawingId) return;
+   259→
+   260→    // Capturar el dataUrl ANTERIOR para el stack de undo
+   261→    const proj = activeProjectRef.current;
+   262→    const prevDrawing = proj?.drawings[drawingId];
+   263→    const prevDataUrl = prevDrawing?.dataUrl ?? "";
+   264→
+   265→    const dataUrl = canvas.toDataURL("image/png");
+   266→    // Pre-cachear la nueva versión
+   267→    await preloadImage(drawingId, dataUrl);
+   268→    await updateDrawing(drawingId, dataUrl);
+   269→
+   270→    // Registrar en el stack de undo (solo si cambió)
+   271→    if (prevDataUrl && prevDataUrl !== dataUrl) {
+   272→      useStore.getState().pushHistory(drawingId, prevDataUrl, dataUrl);
+   273→    }
+   274→
+   275→    lastDrawCommitRef.current = Date.now();
+   276→  }, [drawingCanvasRef, updateDrawing]);
+   277→
+   278→  // ---------------------------------------------------------------------------
+   279→  // Punto de entrada del pointer down (síncrono lo máximo posible)
+   280→  // ---------------------------------------------------------------------------
+   281→
+   282→  const handlePointerDown = useCallback(
+   283→    async (e: React.PointerEvent) => {
+   284→      const proj = activeProjectRef.current;
+   285→      if (!proj) return;
+   286→      const layer = proj.layers.find((l) => l.id === proj.currentLayerId);
+   287→      if (!layer || layer.locked || !layer.visible || layer.type === "audio") return;
+   288→
+   289→      const tool = activeToolRef.current;
+   290→
+   291→      // --- MODIFICADOR Z: si Z está apretado, entrar en modo zoom por arrastre ---
+   292→      // Arrastra hacia ARRIBA (dy<0) para acercar; hacia ABAJO (dy>0) para alejar.
+   293→      // Mientras tanto, la rueda del mouse sigue funcionando para zoom.
+   294→      if (zModifierRef.current) {
+   295→        isPanningRef.current = false;
+   296→        isZoomingRef.current = true;
+   297→        isDrawingRef.current = false;
+   298→        zoomStartRef.current = {
+   299→          y: e.clientY,
+   300→          zoom: activeCanvasViewRef.current.zoom,
+   301→        };
+   302→        return;
+   303→      }
+   304→
+   305→      // --- Pan: síncrono ---
+   306→      if (tool === "pan") {
+   307→        isPanningRef.current = true;
+   308→        isDrawingRef.current = false;
+   309→        panStartRef.current = {
+   310→          x: e.clientX,
+   311→          y: e.clientY,
+   312→          panX: activeCanvasViewRef.current.panX,
+   313→          panY: activeCanvasViewRef.current.panY,
+   314→        };
+   315→        return;
+   316→      }
+   317→
+   318→      // --- Zoom: síncrono (toggle zoom x2 / x1) ---
+   319→      if (tool === "zoom") {
+   320→        const cur = activeCanvasViewRef.current.zoom;
+   321→        setCanvasView({ zoom: cur > 1 ? 1 : 2 });
+   322→        return;
+   323→      }
+   324→
+   325→      // --- Cuentagotas: síncrono ---
+   326→      if (tool === "eyedropper") {
+   327→        const pt = getCanvasPoint(e.clientX, e.clientY);
+   328→        if (!pt) return;
+   329→        const canvas = drawingCanvasRef.current;
+   330→        if (!canvas) return;
+   331→        const ctx = canvas.getContext("2d");
+   332→        if (!ctx) return;
+   333→        const x = Math.floor(pt.x);
+   334→        const y = Math.floor(pt.y);
+   335→        if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return;
+   336→        let r = 255, g = 255, b = 255;
+   337→        try {
+   338→          const data = ctx.getImageData(x, y, 1, 1).data;
+   339→          r = data[0]; g = data[1]; b = data[2];
+   340→        } catch (_) { /* ignore */ }
+   341→        const hex = `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+   342→        useStore.getState().setBrush({ color: hex });
+   343→        setTool("pencil");
+   344→        return;
+   345→      }
+   346→
+   347→      // --- Herramientas que requieren un drawing activo ---
+   348→      // Para herramientas que sólo necesitan "leer" (selection, transform),
+   349→      // no creamos un drawing nuevo automáticamente
+   350→      if (tool === "selection" || tool === "transform") {
+   351→        const pt = getCanvasPoint(e.clientX, e.clientY);
+   352→        if (!pt) return;
+   353→        // RESETEAR smoother y lastPos para evitar "raya" del trazo anterior
+   354→        smootherRef.current = createSmoother(activeBrushRef.current.smoothing);
+   355→        startPosRef.current = pt;
+   356→        lastPosRef.current = pt; // IMPORTANTE: necesario para que handleUp calcule bounds
+   357→        isDrawingRef.current = true;
+   358→        return;
+   359→      }
+   360→
+   361→      // Crear/obtener drawing para herramientas de dibujo
+   362→      const cell = layer.cells.find(
+   363→        (c) =>
+   364→          proj.currentFrame >= c.startFrame &&
+   365→          proj.currentFrame < c.startFrame + c.duration
+   366→      );
+   367→
+   368→      let drawingId = cell?.drawingId ?? null;
+   369→      if (!drawingId && (tool === "pencil" || tool === "brush" || tool === "ink" || tool === "eraser" || tool === "line" || tool === "rectangle" || tool === "ellipse" || tool === "fill")) {
+   370→        // Crear drawing vacío inmediatamente (síncrono)
+   371→        const newId = genId("draw");
+   372→        const now = Date.now();
+   373→        const emptyCanvas = document.createElement("canvas");
+   374→        emptyCanvas.width = proj.settings.width;
+   375→        emptyCanvas.height = proj.settings.height;
+   376→        const emptyDataUrl = emptyCanvas.toDataURL("image/png");
+   377→
+   378→        // Actualizar store
+   379→        useStore.setState((s) => {
+   380→          if (!s.project) return {};
+   381→          // Buscar celda actual o crear nueva
+   382→          const layers = s.project.layers.map((l) => {
+   383→            if (l.id !== layer.id) return l;
+   384→            const cells = [...l.cells];
+   385→            const existing = cells.find(
+   386→              (c) =>
+   387→                s.project!.currentFrame >= c.startFrame &&
+   388→                s.project!.currentFrame < c.startFrame + c.duration
+   389→            );
+   390→            if (existing) {
+   391→              const idx = cells.indexOf(existing);
+   392→              cells[idx] = { ...existing, drawingId: newId };
+   393→            } else {
+   394→              cells.push({
+   395→                id: genId("cell"),
+   396→                drawingId: newId,
+   397→                startFrame: s.project.currentFrame,
+   398→                duration: 1,
+   399→              });
+   400→              cells.sort((a, b) => a.startFrame - b.startFrame);
+   401→            }
+   402→            return { ...l, cells };
+   403→          });
+   404→          return {
+   405→            project: {
+   406→              ...s.project,
+   407→              layers,
+   408→              drawings: {
+   409→                ...s.project.drawings,
+   410→                [newId]: {
+   411→                  id: newId,
+   412→                  name: `Drawing ${Object.keys(s.project.drawings).length + 1}`,
+   413→                  dataUrl: emptyDataUrl,
+   414→                  width: s.project.settings.width,
+   415→                  height: s.project.settings.height,
+   416→                  createdAt: now,
+   417→                  updatedAt: now,
+   418→                },
+   419→              },
+   420→              dirty: true,
+   421→              updatedAt: now,
+   422→            },
+   423→          };
+   424→        });
+   425→
+   426→        // Pre-cachear el drawing vacío
+   427→        await preloadImage(newId, emptyDataUrl);
+   428→        drawingId = newId;
+   429→      }
+   430→
+   431→      if (!drawingId) return;
+   432→
+   433→      // Cargar el drawing en el canvas activo (síncrono si está cacheado)
+   434→      await loadDrawingIntoCanvas(drawingId);
+   435→
+   436→      const pt = getCanvasPoint(e.clientX, e.clientY);
+   437→      if (!pt) return;
+   438→
+   439→      // IMPORTANTE: setear el estado de dibujo INMEDIATAMENTE
+   440→      // y RESETEAR el smoother para que no quede con la posición del
+   441→      // trazo anterior (causaba el bug "raya al comenzar en cualquier dirección")
+   442→      isDrawingRef.current = true;
+   443→      startPosRef.current = pt;
+   444→      lastPosRef.current = pt;
+   445→      smootherRef.current = createSmoother(activeBrushRef.current.smoothing);
+   446→      // FIX: cuando e.pressure es 0 o undefined (mouse, o pen apenas tocando la
+   447→      // tableta), NO usar 1.0 (presión máxima) — usar minSizePressure para que
+   448→      // el punto inicial sea pequeño y no aparezca un "punto grueso" al inicio.
+   449→      // El trazo crecerá al recibir eventos de move con presión real.
+   450→      const b0 = activeBrushRef.current;
+   451→      pressureRef.current = b0.pressureSensitivity
+   452→        ? (e.pressure && e.pressure > 0 ? e.pressure : b0.minSizePressure)
+   453→        : 1;
+   454→
+   455→      const canvas = drawingCanvasRef.current;
+   456→      if (!canvas) return;
+   457→      const ctx = canvas.getContext("2d");
+   458→      if (!ctx) return;
+   459→
+   460→      // Para primitivas, guardar estado actual
+   461→      if (tool === "line" || tool === "rectangle" || tool === "ellipse") {
+   462→        savedImageRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
+   463→      }
+   464→
+   465→      // Bote de tinta: ejecutar y commitear inmediatamente
+   466→      if (tool === "fill") {
+   467→        const color = hexToRgb(activeBrushRef.current.color);
+   468→        color.a = Math.round(activeBrushRef.current.opacity * 255);
+   469→        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+   470→        floodFill(imgData, pt.x, pt.y, color);
+   471→        ctx.putImageData(imgData, 0, 0);
+   472→        isDrawingRef.current = false;
+   473→        await commitDrawing();
+   474→        return;
+   475→      }
+   476→
+   477→      // Lápiz, pincel, pluma de tinta, goma: trazar punto inicial
+   478→      const b = activeBrushRef.current;
+   479→      if (tool === "pencil") {
+   480→        // Lápiz: textura de mina de grafito
+   481→        configurePencil(ctx, b, pressureRef.current);
+   482→        const size = b.pressureSensitivity
+   483→          ? b.size * Math.max(b.minSizePressure, pressureRef.current)
+   484→          : b.size;
+   485→        drawPencilDab(ctx, pt.x, pt.y, size, b.opacity * 0.7);
+   486→      } else if (tool === "ink") {
+   487→        // Pluma de tinta: punto inicial con flujo irregular
+   488→        const size = b.pressureSensitivity
+   489→          ? b.size * Math.max(b.minSizePressure, pressureRef.current)
+   490→          : b.size;
+   491→        drawInkDab(ctx, pt.x, pt.y, size, b.color, b.opacity, pressureRef.current);
+   492→      } else if (tool === "brush") {
+   493→        // Pincel: trazo suave y redondo
+   494→        configureStroke(ctx, b, pressureRef.current);
+   495→        ctx.beginPath();
+   496→        ctx.arc(pt.x, pt.y, Math.max(0.5, ctx.lineWidth / 2), 0, Math.PI * 2);
+   497→        ctx.fillStyle = b.color;
+   498→        ctx.fill();
+   499→      } else if (tool === "eraser") {
+   500→        configureEraser(ctx, b, pressureRef.current);
+   501→      }
+   502→    },
+   503→    [getCanvasPoint, loadDrawingIntoCanvas, commitDrawing, setTool, setCanvasView, drawingCanvasRef]
+   504→  );
+   505→
+   506→  // ---------------------------------------------------------------------------
+   507→  // Move y Up: window listeners (bulletproof)
+   508→  // ---------------------------------------------------------------------------
+   509→
+   510→  const handleMove = useCallback(
+   511→    (e: PointerEvent) => {
+   512→      // Zoom por arrastre (modificador Z apretado + drag)
+   513→      // dy < 0 (arrastra hacia arriba) → zoom in
+   514→      // dy > 0 (arrastra hacia abajo) → zoom out
+   515→      if (isZoomingRef.current && zoomStartRef.current) {
+   516→        const dy = e.clientY - zoomStartRef.current.y;
+   517→        // Cada 100px de drag cambia el zoom por un factor de 2
+   518→        const factor = Math.exp(-dy / 200);
+   519→        const newZoom = Math.max(0.05, Math.min(20, zoomStartRef.current.zoom * factor));
+   520→        setCanvasView({ zoom: newZoom });
+   521→        return;
+   522→      }
+   523→
+   524→      // Pan (tool "pan")
+   525→      if (isPanningRef.current && panStartRef.current) {
+   526→        const dx = e.clientX - panStartRef.current.x;
+   527→        const dy = e.clientY - panStartRef.current.y;
+   528→        setCanvasView({
+   529→          panX: panStartRef.current.panX + dx,
+   530→          panY: panStartRef.current.panY + dy,
+   531→        });
+   532→        return;
+   533→      }
+   534→
+   535→      if (!isDrawingRef.current) return;
+   536→
+   537→      const proj = activeProjectRef.current;
+   538→      if (!proj) return;
+   539→      const layer = proj.layers.find((l) => l.id === proj.currentLayerId);
+   540→      if (!layer || layer.locked || !layer.visible) return;
+   541→
+   542→      const tool = activeToolRef.current;
+   543→      const pt = getCanvasPoint(e.clientX, e.clientY);
+   544→      if (!pt || !startPosRef.current) return;
+   545→
+   546→      const canvas = drawingCanvasRef.current;
+   547→      if (!canvas) return;
+   548→      const ctx = canvas.getContext("2d");
+   549→      if (!ctx) return;
+   550→
+   551→      const b = activeBrushRef.current;
+   552→      // FIX: si e.pressure es 0/undefined durante un trazo (tableta que envía
+   553→      // eventos intermitentes con pressure=0), mantener la última presión conocida
+   554→      // en lugar de saltar a 1.0 (que causaba puntos gruesos en medio del trazo).
+   555→      if (b.pressureSensitivity) {
+   556→        if (e.pressure && e.pressure > 0) {
+   557→          pressureRef.current = e.pressure;
+   558→        }
+   559→        // si e.pressure es 0, dejamos pressureRef con su valor anterior (carry-over)
+   560→      } else {
+   561→        pressureRef.current = 1;
+   562→      }
+   563→
+   564→      if (tool === "pencil") {
+   565→        // Lápiz: dibujar dabs de mina a lo largo del trazo
+   566→        configurePencil(ctx, b, pressureRef.current);
+   567→        const size = b.pressureSensitivity
+   568→          ? b.size * Math.max(b.minSizePressure, pressureRef.current)
+   569→          : b.size;
+   570→        const smoothed = smoothPoint(smootherRef.current, pt.x, pt.y);
+   571→        // Dibujar dabs entre lastPos y smoothed para crear un trazo continuo
+   572→        if (lastPosRef.current) {
+   573→          const dx = smoothed.x - lastPosRef.current.x;
+   574→          const dy = smoothed.y - lastPosRef.current.y;
+   575→          const dist = Math.sqrt(dx * dx + dy * dy);
+   576→          const step = Math.max(1, size * 0.15);
+   577→          const steps = Math.max(1, Math.floor(dist / step));
+   578→          for (let i = 0; i <= steps; i++) {
+   579→            const t = i / steps;
+   580→            const x = lastPosRef.current.x + dx * t;
+   581→            const y = lastPosRef.current.y + dy * t;
+   582→            drawPencilDab(ctx, x, y, size, b.opacity * 0.5);
+   583→          }
+   584→        }
+   585→        lastPosRef.current = smoothed;
+   586→      } else if (tool === "ink") {
+   587→        // Pluma de tinta: trazo con flujo irregular
+   588→        const size = b.pressureSensitivity
+   589→          ? b.size * Math.max(b.minSizePressure, pressureRef.current)
+   590→          : b.size;
+   591→        const smoothed = smoothPoint(smootherRef.current, pt.x, pt.y);
+   592→        if (lastPosRef.current) {
+   593→          drawInkSegment(
+   594→            ctx,
+   595→            lastPosRef.current.x,
+   596→            lastPosRef.current.y,
+   597→            smoothed.x,
+   598→            smoothed.y,
+   599→            size,
+   600→            b.color,
+   601→            b.opacity,
+   602→            pressureRef.current
+   603→          );
+   604→        }
+   605→        lastPosRef.current = smoothed;
+   606→      } else if (tool === "brush" || tool === "eraser") {
+   607→        if (tool === "brush") {
+   608→          configureStroke(ctx, b, pressureRef.current);
+   609→        } else {
+   610→          configureEraser(ctx, b, pressureRef.current);
+   611→        }
+   612→        const smoothed = smoothPoint(smootherRef.current, pt.x, pt.y);
+   613→        // Continuamos el trazo desde lastPos
+   614→        if (lastPosRef.current) {
+   615→          ctx.beginPath();
+   616→          ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
+   617→          ctx.lineTo(smoothed.x, smoothed.y);
+   618→          ctx.stroke();
+   619→        }
+   620→        lastPosRef.current = smoothed;
+   621→      } else if (tool === "line" || tool === "rectangle" || tool === "ellipse") {
+   622→        // Restaurar estado guardado y dibujar primitiva
+   623→        if (savedImageRef.current) {
+   624→          ctx.putImageData(savedImageRef.current, 0, 0);
+   625→        }
+   626→        configureStroke(ctx, b, pressureRef.current);
+   627→        if (tool === "line") {
+   628→          strokeLine(ctx, startPosRef.current.x, startPosRef.current.y, pt.x, pt.y);
+   629→        } else if (tool === "rectangle") {
+   630→          strokeRectangle(ctx, startPosRef.current.x, startPosRef.current.y, pt.x, pt.y);
+   631→        } else if (tool === "ellipse") {
+   632→          strokeEllipse(ctx, startPosRef.current.x, startPosRef.current.y, pt.x, pt.y);
+   633→        }
+   634→      } else if (tool === "selection") {
+   635→        // IMPORTANTE: actualizar lastPosRef.current con la posición actual
+   636→        // para que handleUp pueda calcular los bounds correctamente
+   637→        lastPosRef.current = pt;
+   638→        // Dibujar rectángulo de selección en overlay
+   639→        const overlay = overlayCanvasRef.current;
+   640→        if (!overlay) return;
+   641→        const octx = overlay.getContext("2d");
+   642→        if (!octx) return;
+   643→        octx.clearRect(0, 0, overlay.width, overlay.height);
+   644→        octx.strokeStyle = "#4dabf7";
+   645→        octx.lineWidth = 1;
+   646→        octx.setLineDash([4, 4]);
+   647→        const x = Math.min(startPosRef.current.x, pt.x);
+   648→        const y = Math.min(startPosRef.current.y, pt.y);
+   649→        const w = Math.abs(pt.x - startPosRef.current.x);
+   650→        const h = Math.abs(pt.y - startPosRef.current.y);
+   651→        octx.strokeRect(x, y, w, h);
+   652→        octx.fillStyle = "rgba(77, 171, 247, 0.15)";
+   653→        octx.fillRect(x, y, w, h);
+   654→        octx.setLineDash([]);
+   655→      }
+   656→    },
+   657→    [getCanvasPoint, setCanvasView, drawingCanvasRef, overlayCanvasRef]
+   658→  );
+   659→
+   660→  const handleUp = useCallback(
+   661→    async (e: PointerEvent) => {
+   662→      // Zoom por arrastre fin
+   663→      if (isZoomingRef.current) {
+   664→        isZoomingRef.current = false;
+   665→        zoomStartRef.current = null;
+   666→        return;
+   667→      }
+   668→      // Pan fin
+   669→      if (isPanningRef.current) {
+   670→        isPanningRef.current = false;
+   671→        panStartRef.current = null;
+   672→        return;
+   673→      }
+   674→
+   675→      if (!isDrawingRef.current) return;
+   676→      isDrawingRef.current = false;
+   677→
+   678→      const tool = activeToolRef.current;
+   679→
+   680→      // Para selection: guardar bounds, mantener visibles las "marching ants"
+   681→      // y EXTRAER el contenido (cortar). Luego el usuario puede pegar con Ctrl+V
+   682→      // o mover con la herramienta Transformar.
+   683→      if (tool === "selection") {
+   684→        const overlay = overlayCanvasRef.current;
+   685→        // Calcular bounds
+   686→        if (startPosRef.current && lastPosRef.current) {
+   687→          const x = Math.min(startPosRef.current.x, lastPosRef.current.x);
+   688→          const y = Math.min(startPosRef.current.y, lastPosRef.current.y);
+   689→          const w = Math.abs(lastPosRef.current.x - startPosRef.current.x);
+   690→          const h = Math.abs(lastPosRef.current.y - startPosRef.current.y);
+   691→          if (w > 2 && h > 2) {
+   692→            selectionBoundsRef.current = { x, y, width: w, height: h };
+   693→            // Extraer pixels seleccionados (cortar)
+   694→            const canvas = drawingCanvasRef.current;
+   695→            if (canvas) {
+   696→              const ctx = canvas.getContext("2d");
+   697→              if (ctx) {
+   698→                try {
+   699→                  selectionImageRef.current = ctx.getImageData(x, y, w, h);
+   700→                  // Limpiar la región seleccionada
+   701→                  ctx.clearRect(x, y, w, h);
+   702→                  await commitDrawing();
+   703→                } catch (err) {
+   704→                  console.error(err);
+   705→                }
+   706→              }
+   707→            }
+   708→            // Dibujar "marching ants" en overlay (animación)
+   709→            if (overlay) {
+   710→              const octx = overlay.getContext("2d");
+   711→              if (octx) {
+   712→                octx.clearRect(0, 0, overlay.width, overlay.height);
+   713→                octx.strokeStyle = "#4dabf7";
+   714→                octx.lineWidth = 1.5;
+   715→                octx.setLineDash([6, 4]);
+   716→                octx.strokeRect(x, y, w, h);
+   717→                octx.setLineDash([]);
+   718→                // Indicador de "contenido cortado" — texto pequeño
+   719→                octx.fillStyle = "rgba(77, 171, 247, 0.9)";
+   720→                octx.font = "11px sans-serif";
+   721→                octx.textAlign = "left";
+   722→                octx.textBaseline = "top";
+   723→                octx.fillText("✂ Ctrl+V para pegar", x + 4, y - 14);
+   724→              }
+   725→            }
+   726→          } else {
+   727→            // Selección muy pequeña: borrar selección existente
+   728→            selectionBoundsRef.current = null;
+   729→            selectionImageRef.current = null;
+   730→            if (overlay) {
+   731→              const octx = overlay.getContext("2d");
+   732→              octx?.clearRect(0, 0, overlay.width, overlay.height);
+   733→            }
+   734→          }
+   735→        }
+   736→        startPosRef.current = null;
+   737→        lastPosRef.current = null;
+   738→        return;
+   739→      }
+   740→
+   741→      startPosRef.current = null;
+   742→      lastPosRef.current = null;
+   743→      savedImageRef.current = null;
+   744→
+   745→      await commitDrawing();
+   746→    },
+   747→    [overlayCanvasRef, drawingCanvasRef, commitDrawing]
+   748→  );
+   749→
+   750→  // ---------------------------------------------------------------------------
+   751→  // Wheel para zoom
+   752→  // ---------------------------------------------------------------------------
+   753→
+   754→  const handleWheel = useCallback(
+   755→    (e: WheelEvent) => {
+   756→      const proj = activeProjectRef.current;
+   757→      if (!proj) return;
+   758→      e.preventDefault();
+   759→      const delta = -e.deltaY * 0.001;
+   760→      const cur = activeCanvasViewRef.current.zoom;
+   761→      const newZoom = Math.max(0.05, Math.min(20, cur * (1 + delta * 2)));
+   762→      setCanvasView({ zoom: newZoom });
+   763→    },
+   764→    [setCanvasView]
+   765→  );
+   766→
+   767→  // ---------------------------------------------------------------------------
+   768→  // Helpers para selección (definidos antes del return)
+   769→  // ---------------------------------------------------------------------------
+   770→
+   771→  const clearSelection = useCallback(() => {
+   772→    selectionBoundsRef.current = null;
+   773→    selectionImageRef.current = null;
+   774→    // Limpiar overlay (borrar marching ants)
+   775→    const overlay = overlayCanvasRef.current;
+   776→    if (overlay) {
+   777→      const octx = overlay.getContext("2d");
+   778→      octx?.clearRect(0, 0, overlay.width, overlay.height);
+   779→    }
+   780→  }, [overlayCanvasRef]);
+   781→
+   782→  const pasteSelection = useCallback(async () => {
+   783→    const canvas = drawingCanvasRef.current;
+   784→    const sel = selectionImageRef.current;
+   785→    const bounds = selectionBoundsRef.current;
+   786→    if (!canvas || !sel || !bounds) return;
+   787→    const ctx = canvas.getContext("2d");
+   788→    if (!ctx) return;
+   789→    ctx.putImageData(sel, bounds.x, bounds.y);
+   790→    await commitDrawing();
+   791→    // Limpiar overlay y selección
+   792→    const overlay = overlayCanvasRef.current;
+   793→    if (overlay) {
+   794→      const octx = overlay.getContext("2d");
+   795→      octx?.clearRect(0, 0, overlay.width, overlay.height);
+   796→    }
+   797→    selectionBoundsRef.current = null;
+   798→    selectionImageRef.current = null;
+   799→  }, [drawingCanvasRef, overlayCanvasRef, commitDrawing]);
+   800→
+   801→  // ---------------------------------------------------------------------------
+   802→  // Atajos de teclado para selección (Ctrl+V, Delete, Escape)
+   803→  // ---------------------------------------------------------------------------
+   804→
+   805→  useEffect(() => {
+   806→    const onKey = (e: KeyboardEvent) => {
+   807→      const target = e.target as HTMLElement;
+   808→      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
+   809→        return;
+   810→      }
+   811→      // Ctrl/Cmd + V = pegar selección
+   812→      if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+   813→        e.preventDefault();
+   814→        pasteSelection();
+   815→        return;
+   816→      }
+   817→      // Delete o Backspace = limpiar selección (si hay)
+   818→      if (e.key === "Delete" || e.key === "Backspace") {
+   819→        if (selectionBoundsRef.current) {
+   820→          e.preventDefault();
+   821→          clearSelection();
+   822→        }
+   823→        return;
+   824→      }
+   825→      // Escape = limpiar selección
+   826→      if (e.key === "Escape") {
+   827→        clearSelection();
+   828→        return;
+   829→      }
+   830→    };
+   831→    window.addEventListener("keydown", onKey);
+   832→    return () => window.removeEventListener("keydown", onKey);
+   833→  }, [pasteSelection, clearSelection]);
+   834→
+   835→  // ---------------------------------------------------------------------------
+   836→  // Window listeners para move/up (bulletproof — no dependen de React)
+   837→  // ---------------------------------------------------------------------------
+   838→
+   839→  useEffect(() => {
+   840→    const move = (e: PointerEvent) => handleMove(e);
+   841→    const up = (e: PointerEvent) => handleUp(e);
+   842→    window.addEventListener("pointermove", move, { passive: false });
+   843→    window.addEventListener("pointerup", up);
+   844→    window.addEventListener("pointercancel", up);
+   845→    return () => {
+   846→      window.removeEventListener("pointermove", move);
+   847→      window.removeEventListener("pointerup", up);
+   848→      window.removeEventListener("pointercancel", up);
+   849→    };
+   850→  }, [handleMove, handleUp]);
+   851→
+   852→  // Commit periódico mientras se dibuja
+   853→  useEffect(() => {
+   854→    const interval = setInterval(() => {
+   855→      if (isDrawingRef.current && Date.now() - lastDrawCommitRef.current > 1000) {
+   856→        commitDrawing();
+   857→      }
+   858→    }, 1500);
+   859→    return () => clearInterval(interval);
+   860→  }, [commitDrawing]);
+   861→
+   862→  return {
+   863→    handlePointerDown,
+   864→    handleWheel,
+   865→    loadDrawingIntoCanvas,
+   866→    commitDrawing,
+   867→    selectionBoundsRef,
+   868→    selectionImageRef,
+   869→    clearSelection,
+   870→    pasteSelection,
+   871→  };
+   872→}
+   873→
+   874→// ---------------------------------------------------------------------------
+   875→// Hook de reproducción (motor de animación) — sin flicker
+   876→// ---------------------------------------------------------------------------
+   877→
+   878→export function usePlaybackEngine() {
+   879→  const project = useStore((s) => s.project);
+   880→  const playback = useStore((s) => s.playback);
+   881→  const setPlaying = useStore((s) => s.setPlaying);
+   882→  const gotoFrame = useStore((s) => s.gotoFrame);
+   883→
+   884→  const rafRef = useRef<number | null>(null);
+   885→  const lastTimeRef = useRef<number>(0);
+   886→  const frameAccumRef = useRef<number>(0);
+   887→  const audioRef = useRef<HTMLAudioElement | null>(null);
+   888→
+   889→  useEffect(() => {
+   890→    if (!project || !playback.playing) {
+   891→      if (rafRef.current) {
+   892→        cancelAnimationFrame(rafRef.current);
+   893→        rafRef.current = null;
+   894→      }
+   895→      if (audioRef.current) {
+   896→        audioRef.current.pause();
+   897→        audioRef.current = null;
+   898→      }
+   899→      return;
+   900→    }
+   901→
+   902→    // Usar playbackFps del store (default 6 FPS)
+   903→    const playbackFps = playback.playbackFps || 6;
+   904→    const total = totalFrames(project.layers);
+   905→    const rangeStart = playback.rangeStart ?? 0;
+   906→    const rangeEnd = playback.rangeEnd ?? Math.max(1, total);
+   907→
+   908→    lastTimeRef.current = performance.now();
+   909→    frameAccumRef.current = 0;
+   910→
+   911→    const loop = (time: number) => {
+   912→      const dt = time - lastTimeRef.current;
+   913→      lastTimeRef.current = time;
+   914→      const framesPerMs = playbackFps / 1000;
+   915→      frameAccumRef.current += dt * framesPerMs;
+   916→
+   917→      while (frameAccumRef.current >= 1) {
+   918→        frameAccumRef.current -= 1;
+   919→        const next = project.currentFrame + 1;
+   920→        if (next >= rangeEnd) {
+   921→          if (playback.looping) {
+   922→            gotoFrame(rangeStart);
+   923→            if (audioRef.current) {
+   924→              audioRef.current.currentTime = 0;
+   925→            }
+   926→          } else {
+   927→            setPlaying(false);
+   928→            gotoFrame(rangeEnd - 1);
+   929→            return;
+   930→          }
+   931→        } else {
+   932→          gotoFrame(next);
+   933→        }
+   934→      }
+   935→
+   936→      rafRef.current = requestAnimationFrame(loop);
+   937→    };
+   938→
+   939→    rafRef.current = requestAnimationFrame(loop);
+   940→    return () => {
+   941→      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+   942→    };
+   943→  }, [project, playback, setPlaying, gotoFrame]);
+   944→
+   945→  // Audio sincronizado
+   946→  useEffect(() => {
+   947→    if (!project || !playback.playing) return;
+   948→    const fps = project.settings.fps;
+   949→    const currentFrame = project.currentFrame;
+   950→    for (const clip of Object.values(project.audioClips)) {
+   951→      const start = clip.startFrame;
+   952→      const end = start + Math.floor(clip.duration * fps);
+   953→      if (currentFrame >= start && currentFrame <= end && !clip.muted) {
+   954→        if (audioRef.current && audioRef.current.dataset.id === clip.id) {
+   955→          const expectedTime = (currentFrame - start) / fps;
+   956→          if (Math.abs(audioRef.current.currentTime - expectedTime) > 0.2) {
+   957→            audioRef.current.currentTime = expectedTime;
+   958→          }
+   959→          if (audioRef.current.paused) audioRef.current.play().catch(() => {});
+   960→          return;
+   961→        }
+   962→        if (audioRef.current) {
+   963→          audioRef.current.pause();
+   964→        }
+   965→        const audio = new Audio(clip.dataUrl);
+   966→        audio.volume = clip.volume;
+   967→        audio.dataset.id = clip.id;
+   968→        audio.currentTime = (currentFrame - start) / fps;
+   969→        audio.play().catch(() => {});
+   970→        audioRef.current = audio;
+   971→        return;
+   972→      }
+   973→    }
+   974→    if (audioRef.current) {
+   975→      audioRef.current.pause();
+   976→      audioRef.current = null;
+   977→    }
+   978→  }, [project, playback.playing]);
+   979→}
+   980→

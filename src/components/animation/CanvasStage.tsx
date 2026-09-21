@@ -39,6 +39,11 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   const updateImagePlacement = useStore((s) => s.updateImagePlacement);
   const confirmImagePlacement = useStore((s) => s.confirmImagePlacement);
   const cancelImagePlacement = useStore((s) => s.cancelImagePlacement);
+  // Estado del pincel y herramienta para el cursor de pincel
+  const brush = useStore((s) => s.brush);
+  const currentTool = useStore((s) => s.currentTool);
+  const xModifier = useStore((s) => s.xModifier);
+  const isDrawing = useStore((s) => s.isDrawing);
 
   const drawingCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -46,6 +51,9 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   const backgroundRef = useRef<HTMLCanvasElement | null>(null);
   const compositedRef = useRef<HTMLCanvasElement | null>(null);
   const lastLoadedDrawingRef = useRef<string | null>(null);
+  // Cursor del pincel (overlay visual que sigue al mouse)
+  const brushCursorRef = useRef<HTMLDivElement | null>(null);
+  const isPointerDownRef = useRef(false);
   // Refs para el manejo de drag/scale de la imagen colocada
   const placementImageRef = useRef<HTMLImageElement | null>(null);
   const placementModeRef = useRef<"none" | "move" | "scale-tl" | "scale-tr" | "scale-bl" | "scale-br">("none");
@@ -99,7 +107,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
       ctx.setLineDash([]);
     }
     if (showGrid) {
-      ctx.strokeStyle = "rgba(255,255,255,0.15)";
+      ctx.strokeStyle = "rgba(128,128,128,0.3)";
       ctx.lineWidth = 1;
       const step = 50;
       for (let x = step; x < c.width; x += step) {
@@ -114,7 +122,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
         ctx.lineTo(c.width, y);
         ctx.stroke();
       }
-      ctx.strokeStyle = "rgba(255,255,255,0.4)";
+      ctx.strokeStyle = "rgba(128,128,128,0.6)";
       ctx.beginPath();
       ctx.moveTo(c.width / 2, 0);
       ctx.lineTo(c.width / 2, c.height);
@@ -154,7 +162,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
       if (!layer.visible || layer.type === "audio") continue;
       // En edit mode, excluir la capa activa del composited
       if (excludeActiveLayer && layer.id === activeLayerId) continue;
-      const cell = findCellAtFrame(layer.cells, project.currentFrame);
+      const cell = findCellAtFrame(layer.cells, project.currentFrame, layer.loopRange);
       if (!cell || !cell.drawingId) continue;
       const drawing = project.drawings[cell.drawingId];
       if (!drawing) continue;
@@ -438,12 +446,14 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     if (!project) return;
     // Componer siempre
     compositeAll();
-
+    // Si estamos dibujando activamente, no recargar el drawing del store
+    // (eso sobreescribiría lo que el usuario está pintando en el canvas).
+    if (isDrawing) return;
     // En edición, también cargar el drawing activo
     if (viewMode !== "edit" || playback.playing) return;
     const layer = getCurrentLayer(project);
     if (!layer || layer.type === "audio") return;
-    const cell = findCellAtFrame(layer.cells, project.currentFrame);
+    const cell = findCellAtFrame(layer.cells, project.currentFrame, layer.loopRange);
     const drawingId = cell?.drawingId ?? null;
     // IMPORTANTE: recargar también si cambió el dataUrl del drawing (por undo/redo),
     // no solo si cambió el drawingId. Usamos updatedAt como cache key confiable:
@@ -462,6 +472,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     project?.layers,
     viewMode,
     playback.playing,
+    isDrawing,
     onion,
     compositeAll,
     engine,
@@ -478,23 +489,73 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
 
   const transform = `translate(-50%, -50%) translate(${canvasView.panX}px, ${canvasView.panY}px) scale(${canvasView.zoom}) rotate(${canvasView.rotation}deg)`;
 
+  // Determinar si hay que mostrar el cursor de pincel (círculo que sigue al mouse)
+  // para herramientas de trazo. Si X está apretado, sigue mostrándose como goma.
+  const showsBrushCursor =
+    currentTool === "pencil" ||
+    currentTool === "brush" ||
+    currentTool === "ink" ||
+    currentTool === "watercolor" ||
+    currentTool === "eraser" ||
+    xModifier;
+
+  // Actualizar el tamaño/color del cursor de pincel cuando cambian las settings
+  useEffect(() => {
+    const el = brushCursorRef.current;
+    if (!el) return;
+    const size = Math.max(4, brush.size * canvasView.zoom);
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.borderColor = xModifier ? "#ef4444" : brush.color === "#ffffff" ? "#000000" : brush.color;
+  }, [brush.size, brush.color, canvasView.zoom, currentTool, xModifier]);
+
+  // Listener global pointerup para resetear el estado interno "pointer down"
+  // del canvas (se usa para ocultar el cursor mientras se dibuja).
+  useEffect(() => {
+    const onUp = () => {
+      isPointerDownRef.current = false;
+    };
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
+
   if (!project) return null;
+
+  // Determinar el cursor a usar
+  const baseCursor =
+    currentTool === "pan"
+      ? "grab"
+      : currentTool === "eyedropper"
+        ? "copy"
+        : currentTool === "selection" || currentTool === "transform"
+          ? "default"
+          : "crosshair";
 
   return (
     <div
       ref={containerRef}
       className="relative w-full h-full overflow-hidden bg-neutral-950"
       style={{
-        cursor:
-          useStore.getState().currentTool === "pan"
-            ? "grab"
-            : useStore.getState().currentTool === "eyedropper"
-              ? "copy"
-              : useStore.getState().currentTool === "selection" || useStore.getState().currentTool === "transform"
-                ? "default"
-                : "crosshair",
+        cursor: showsBrushCursor ? "none" : baseCursor,
+        touchAction: "none",
       }}
       onWheel={(e) => engine.handleWheel(e as unknown as WheelEvent)}
+      onMouseMove={(e) => {
+        // Actualizar la posición del cursor de pincel si está visible
+        const el = brushCursorRef.current;
+        if (el && showsBrushCursor) {
+          const rect = containerRef.current?.getBoundingClientRect();
+          if (rect) {
+            el.style.left = `${e.clientX - rect.left}px`;
+            el.style.top = `${e.clientY - rect.top}px`;
+            el.style.opacity = isPointerDownRef.current ? "0.3" : "0.8";
+          }
+        }
+      }}
     >
       <div
         className="absolute"
@@ -507,8 +568,10 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           height,
           boxShadow: "0 0 0 1px rgba(255,255,255,0.2), 0 10px 30px rgba(0,0,0,0.5)",
           cursor: imagePlacement ? "move" : undefined,
+          touchAction: "none",
         }}
         onPointerDown={(e) => {
+          isPointerDownRef.current = true;
           // Si hay un placement activo, interceptar el evento
           if (imagePlacement && handlePlacementPointerDown(e)) {
             e.stopPropagation();
@@ -575,6 +638,23 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           Reiniciar
         </button>
       </div>
+
+      {/* Cursor de pincel: círculo que sigue al mouse. Solo visible para
+          herramientas de trazo (pencil, brush, ink, watercolor, eraser) o
+          cuando X está apretado (modo goma temporal). */}
+      {showsBrushCursor && (
+        <div
+          ref={brushCursorRef}
+          className="pointer-events-none absolute rounded-full border-2 z-50"
+          style={{
+            transform: "translate(-50%, -50%)",
+            left: "-100px",
+            top: "-100px",
+            opacity: 0,
+            borderColor: xModifier ? "#ef4444" : brush.color === "#ffffff" ? "#000000" : brush.color,
+          }}
+        />
+      )}
     </div>
   );
 }

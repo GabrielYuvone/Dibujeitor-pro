@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Animación Tradicional 2D — Escuela de Animación",
+  title: "DIBUJEITOR PRO — Escuela Para Animadores de Rosario",
   description:
     "Software de animación tradicional 2D para escuela: dibujo cuadro a cuadro, línea de tiempo, onion skin, capas, audio y funciones interactivas inspiradas en Flash clásico.",
   keywords: [
@@ -25,8 +25,10 @@ export const metadata: Metadata = {
     "escuela de animación",
     "timeline",
     "dibujo digital",
+    "DIBUJEITOR PRO",
+    "Rosario",
   ],
-  authors: [{ name: "Escuela de Animación" }],
+  authors: [{ name: "Escuela Para Animadores de Rosario" }],
 };
 
 export default function RootLayout({

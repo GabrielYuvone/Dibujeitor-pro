@@ -28,11 +28,16 @@ import {
   HelpCircle,
   Maximize2,
   ChevronLeft,
+  ChevronRight,
+  Layers as LayersIcon,
+  Music as MusicIcon,
+  Library as LibraryIcon,
 } from "lucide-react";
 import { CanvasStage } from "./CanvasStage";
 import { Toolbar } from "./Toolbar";
 import { LayersPanel } from "./LayersPanel";
 import { Timeline } from "./Timeline";
+import { FrameScrubber } from "./FrameScrubber";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { OnionSkinPanel } from "./OnionSkinPanel";
 import { HelpPanel } from "./HelpPanel";
@@ -41,7 +46,7 @@ import { LibraryPanel } from "./LibraryPanel";
 import { ExportDialog } from "./ExportDialog";
 import { HelpDialog } from "./HelpDialog";
 
-type RightPanelTab = "properties" | "onion" | "help" | "audio" | "library";
+type RightPanelTab = "properties" | "layers" | "onion" | "help" | "audio" | "library";
 
 export function EditorView() {
   const project = useStore((s) => s.project);
@@ -66,6 +71,8 @@ export function EditorView() {
   // dejando solo el canvas en grande. Se puede seguir dibujando y usando
   // flechas para navegar frames. Toggle con F1.
   const [fullscreenCanvas, setFullscreenCanvas] = useState(false);
+  const rightPanelVisible = useStore((s) => s.rightPanelVisible);
+  const setRightPanelVisible = useStore((s) => s.setRightPanelVisible);
 
   // Motor de reproducción
   usePlaybackEngine();
@@ -316,16 +323,13 @@ export function EditorView() {
               <Toolbar />
             </div>
 
-            {/* Panel de capas (entre herramientas y lienzo) */}
-            <div className="w-56 shrink-0 border-l border-border">
-              <LayersPanel />
-            </div>
-
             {/* Centro: lienzo */}
             <div className="flex-1 flex flex-col overflow-hidden">
               <div className="flex-1 relative">
                 <CanvasStage width={project.settings.width} height={project.settings.height} />
               </div>
+              {/* Frame scrubber (barra de navegación rápida entre lienzo y timeline) */}
+              <FrameScrubber />
 
               {/* Timeline abajo */}
               <div className="h-72 shrink-0">
@@ -333,41 +337,64 @@ export function EditorView() {
               </div>
             </div>
 
-            {/* Panel derecho: tabs */}
-            <div className="w-80 shrink-0 flex flex-col border-l border-border">
-              <div className="flex border-b border-border bg-muted/30">
-                <TabButton active={rightTab === "properties"} onClick={() => setRightTab("properties")}>
-                  Propiedades
-                </TabButton>
-                <TabButton active={rightTab === "onion"} onClick={() => setRightTab("onion")}>
-                  Onion
-                </TabButton>
-                <TabButton active={rightTab === "help"} onClick={() => setRightTab("help")}>
-                  Ayuda
-                </TabButton>
-                <TabButton active={rightTab === "audio"} onClick={() => setRightTab("audio")}>
-                  Audio
-                </TabButton>
-                <TabButton active={rightTab === "library"} onClick={() => setRightTab("library")}>
-                  Biblioteca
-                </TabButton>
+            {/* Panel derecho: tabs (con iconos) */}
+            {rightPanelVisible ? (
+              <div className="w-72 shrink-0 flex flex-col border-l border-border">
+                <div className="flex border-b border-border bg-muted/30">
+                  {/* Botón para ocultar el panel */}
+                  <button
+                    className="px-2 py-1.5 border-r border-border hover:bg-muted text-muted-foreground hover:text-foreground"
+                    onClick={() => setRightPanelVisible(false)}
+                    title="Ocultar panel"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                  <TabButton active={rightTab === "properties"} onClick={() => setRightTab("properties")} title="Propiedades">
+                    <Settings2 size={16} />
+                  </TabButton>
+                  <TabButton active={rightTab === "layers"} onClick={() => setRightTab("layers")} title="Capas">
+                    <LayersIcon size={16} />
+                  </TabButton>
+                  <TabButton active={rightTab === "onion"} onClick={() => setRightTab("onion")} title="Onion skin">
+                    <Eye size={16} />
+                  </TabButton>
+                  <TabButton active={rightTab === "audio"} onClick={() => setRightTab("audio")} title="Audio">
+                    <MusicIcon size={16} />
+                  </TabButton>
+                  <TabButton active={rightTab === "library"} onClick={() => setRightTab("library")} title="Biblioteca">
+                    <LibraryIcon size={16} />
+                  </TabButton>
+                  <TabButton active={rightTab === "help"} onClick={() => setRightTab("help")} title="Ayuda">
+                    <HelpCircle size={16} />
+                  </TabButton>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  {rightTab === "properties" && <PropertiesPanel />}
+                  {rightTab === "layers" && <LayersPanel />}
+                  {rightTab === "onion" && (
+                    <div className="h-full overflow-y-auto no-scrollbar">
+                      <OnionSkinPanel />
+                    </div>
+                  )}
+                  {rightTab === "help" && (
+                    <div className="h-full overflow-y-auto no-scrollbar">
+                      <HelpPanel />
+                    </div>
+                  )}
+                  {rightTab === "audio" && <AudioPanel />}
+                  {rightTab === "library" && <LibraryPanel />}
+                </div>
               </div>
-              <div className="flex-1 overflow-hidden">
-                {rightTab === "properties" && <PropertiesPanel />}
-                {rightTab === "onion" && (
-                  <div className="h-full overflow-y-auto no-scrollbar">
-                    <OnionSkinPanel />
-                  </div>
-                )}
-                {rightTab === "help" && (
-                  <div className="h-full overflow-y-auto no-scrollbar">
-                    <HelpPanel />
-                  </div>
-                )}
-                {rightTab === "audio" && <AudioPanel />}
-                {rightTab === "library" && <LibraryPanel />}
-              </div>
-            </div>
+            ) : (
+              // Botón flotante para volver a mostrar el panel derecho
+              <button
+                className="w-8 shrink-0 border-l border-border bg-muted/30 hover:bg-muted flex items-center justify-center"
+                onClick={() => setRightPanelVisible(true)}
+                title="Mostrar panel"
+              >
+                <ChevronLeft size={14} />
+              </button>
+            )}
           </div>
 
           {/* Botones flotantes */}
@@ -396,19 +423,22 @@ function TabButton({
   active,
   onClick,
   children,
+  title,
 }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  title?: string;
 }) {
   return (
     <button
-      className={`flex-1 px-2 py-1.5 text-xs font-medium border-b-2 transition-colors ${
+      className={`flex-1 px-2 py-1.5 text-xs font-medium border-b-2 transition-colors flex items-center justify-center ${
         active
           ? "border-primary text-primary bg-background"
           : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30"
       }`}
       onClick={onClick}
+      title={title}
     >
       {children}
     </button>

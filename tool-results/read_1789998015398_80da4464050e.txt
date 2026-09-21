@@ -1,0 +1,1360 @@
+     1→     1→// ============================================================================
+     2→     2→// store.ts — Estado global con Zustand (motor de animación)
+     3→     3→// ============================================================================
+     4→     4→
+     5→     5→"use client";
+     6→     6→
+     7→     7→import { create } from "zustand";
+     8→     8→import type {
+     9→     9→  AnimationProject,
+    10→    10→  BrushSettings,
+    11→    11→  CanvasView,
+    12→    12→  Cell,
+    13→    13→  Drawing,
+    14→    14→  ExportOptions,
+    15→    15→  ID,
+    16→    16→  InteractiveButton,
+    17→    17→  Layer,
+    18→    18→  OnionSkinSettings,
+    19→    19→  PlaybackState,
+    20→    20→  ToolId,
+    21→    21→  ViewMode,
+    22→    22→  Action,
+    23→    23→  EventHandler,
+    24→    24→  Variable,
+    25→    25→  Marker,
+    26→    26→  AudioClip,
+    27→    27→} from "./types";
+    28→    28→import { DEFAULT_BRUSH, DEFAULT_ONION, DEFAULT_SETTINGS, createBlankProject } from "./defaults";
+    29→    29→import { genId, totalFrames } from "./utils";
+    30→    30→import {
+    31→    31→  deleteProjectFromDb,
+    32→    32→  listProjectsFromDb,
+    33→    33→  loadProjectFromDb,
+    34→    34→  saveProjectToDb,
+    35→    35→  duplicateProjectInDb,
+    36→    36→} from "./db";
+    37→    37→
+    38→    38→// ---------------------------------------------------------------------------
+    39→    39→// Estado de la aplicación
+    40→    40→// ---------------------------------------------------------------------------
+    41→    41→
+    42→    42→interface AppState {
+    43→    43→  // Lista de proyectos en disco
+    44→    44→  projects: AnimationProject[];
+    45→    45→  projectsLoading: boolean;
+    46→    46→
+    47→    47→  // Proyecto abierto
+    48→    48→  project: AnimationProject | null;
+    49→    49→
+    50→    50→  // Estado de UI / herramientas
+    51→    51→  currentTool: ToolId;
+    52→    52→  brush: BrushSettings;
+    53→    53→  onion: OnionSkinSettings;
+    54→    54→  playback: PlaybackState;
+    55→    55→  canvasView: CanvasView;
+    56→    56→  viewMode: ViewMode;
+    57→    57→  exportOptions: ExportOptions;
+    58→    58→
+    59→    59→  // Estado de UI
+    60→    60→  panelLayout: "default" | "focus";
+    61→    61→  showGrid: boolean;
+    62→    62→  showSafeArea: boolean;
+    63→    63→  showRulers: boolean;
+    64→    64→  thumbnailCache: Record<ID, string>;
+    65→    65→  isAutosaving: boolean;
+    66→    66→  lastAutosaveAt: number | null;
+    67→    67→
+    68→    68→  // Selección temporal (texto activo)
+    69→    69→  drawingBuffer: HTMLCanvasElement | null;
+    70→    70→
+    71→    71→  // Pilas de undo/redo
+    72→    72→  undoStack: HistoryEntry[];
+    73→    73→  redoStack: HistoryEntry[];
+    74→    74→  skipReloadOnHistory: boolean;
+    75→    75→
+    76→    76→  // Placement de imagen importada: cuando el usuario hace click en una
+    77→    77→  // imagen de la biblioteca, se activa el modo transformación. La imagen
+    78→    78→  // se muestra sobre el canvas con su aspect ratio original, y el usuario
+    79→    79→  // puede moverla (drag dentro) o escalarla (drag de las puntas) antes de
+    80→    80→  // confirmar (Enter) o cancelar (Escape).
+    81→    81→  imagePlacement: ImagePlacement | null;
+    82→    82→
+    83→    83→  // Acciones
+    84→    84→  // Projects
+    85→    85→  refreshProjects: () => Promise<void>;
+    86→    86→  newProject: (name: string) => Promise<AnimationProject>;
+    87→    87→  openProject: (id: string) => Promise<void>;
+    88→    88→  saveCurrent: () => Promise<void>;
+    89→    89→  duplicateCurrent: (newName: string) => Promise<void>;
+    90→    90→  deleteProject: (id: string) => Promise<void>;
+    91→    91→  closeProject: () => void;
+    92→    92→  exportProject: () => AnimationProject | null;
+    93→    93→
+    94→    94→  // Tools
+    95→    95→  setTool: (tool: ToolId) => void;
+    96→    96→  setBrush: (b: Partial<BrushSettings>) => void;
+    97→    97→
+    98→    98→  // Onion
+    99→    99→  setOnion: (o: Partial<OnionSkinSettings>) => void;
+   100→   100→
+   101→   101→  // Playback
+   102→   102→  togglePlay: () => void;
+   103→   103→  setPlaying: (p: boolean) => void;
+   104→   104→  setLooping: (l: boolean) => void;
+   105→   105→  setPlaybackFps: (fps: number) => void;
+   106→   106→  setRange: (start: number | null, end: number | null) => void;
+   107→   107→
+   108→   108→  // Canvas view
+   109→   109→  setCanvasView: (v: Partial<CanvasView>) => void;
+   110→   110→  resetCanvasView: () => void;
+   111→   111→
+   112→   112→  // Navigation
+   113→   113→  gotoFrame: (frame: number) => void;
+   114→   114→  nextFrame: () => void;
+   115→   115→  prevFrame: () => void;
+   116→   116→  setViewMode: (m: ViewMode) => void;
+   117→   117→
+   118→   118→  // Project settings
+   119→   119→  setProjectSettings: (s: Partial<AnimationProject["settings"]>) => void;
+   120→   120→  renameProject: (name: string) => void;
+   121→   121→
+   122→   122→  // Layers
+   123→   123→  addLayer: (type: Layer["type"], name?: string) => string;
+   124→   124→  deleteLayer: (id: ID) => void;
+   125→   125→  selectLayer: (id: ID) => void;
+   126→   126→  renameLayer: (id: ID, name: string) => void;
+   127→   127→  toggleLayerVisible: (id: ID) => void;
+   128→   128→  toggleLayerLocked: (id: ID) => void;
+   129→   129→  setLayerOpacity: (id: ID, opacity: number) => void;
+   130→   130→  moveLayer: (id: ID, dir: "up" | "down") => void;
+   131→   131→  duplicateLayer: (id: ID) => void;
+   132→   132→
+   133→   133→  // Cells / drawings
+   134→   134→  ensureDrawingForCell: (layerId: ID, frame: number) => Promise<ID>;
+   135→   135→  setCellDrawing: (layerId: ID, frame: number, drawingId: ID | null) => void;
+   136→   136→  extendCell: (layerId: ID, frame: number, delta: number) => void;
+   137→   137→  insertEmptyFrame: (layerId: ID, frame: number) => void;
+   138→   138→  removeCell: (layerId: ID, cellId: ID) => void;
+   139→   139→  duplicateCell: (layerId: ID, cellId: ID) => void;
+   140→   140→  moveCell: (layerId: ID, cellId: ID, newFrame: number) => void;
+   141→   141→  setCellLabel: (layerId: ID, cellId: ID, label: string) => void;
+   142→   142→  setFrameLabel: (layerId: ID, frame: number, label: string) => void;
+   143→   143→
+   144→   144→  // Drawings
+   145→   145→  addDrawing: (drawing: Drawing) => void;
+   146→   146→  updateDrawing: (id: ID, dataUrl: string) => Promise<void>;
+   147→   147→  deleteDrawing: (id: ID) => void;
+   148→   148→  getDrawing: (id: ID) => Drawing | null;
+   149→   149→
+   150→   150→  // Markers
+   151→   151→  addMarker: (frame: number, label: string, color: string) => void;
+   152→   152→  deleteMarker: (id: ID) => void;
+   153→   153→  gotoNextMarker: () => void;
+   154→   154→  gotoPrevMarker: () => void;
+   155→   155→
+   156→   156→  // Audio
+   157→   157→  addAudioClip: (clip: AudioClip) => void;
+   158→   158→  deleteAudioClip: (id: ID) => void;
+   159→   159→  setAudioClipStart: (id: ID, frame: number) => void;
+   160→   160→  toggleAudioMute: (id: ID) => void;
+   161→   161→
+   162→   162→  // Buttons & actions
+   163→   163→  addButton: (button: Partial<InteractiveButton>) => ID;
+   164→   164→  updateButton: (id: ID, patch: Partial<InteractiveButton>) => void;
+   165→   165→  deleteButton: (id: ID) => void;
+   166→   166→  addHandler: (buttonId: ID, handler: EventHandler) => void;
+   167→   167→  updateHandler: (buttonId: ID, handlerId: ID, patch: Partial<EventHandler>) => void;
+   168→   168→  deleteHandler: (buttonId: ID, handlerId: ID) => void;
+   169→   169→  addAction: (buttonId: ID, handlerId: ID, action: Action) => void;
+   170→   170→  updateAction: (
+   171→   171→    buttonId: ID,
+   172→   172→    handlerId: ID,
+   173→   173→    actionId: ID,
+   174→   174→    patch: Partial<Action>
+   175→   175→  ) => void;
+   176→   176→  deleteAction: (buttonId: ID, handlerId: ID, actionId: ID) => void;
+   177→   177→
+   178→   178→  // Variables
+   179→   179→  setVariable: (name: string, value: Variable["value"]) => void;
+   180→   180→  deleteVariable: (name: string) => void;
+   181→   181→
+   182→   182→  // Export options
+   183→   183→  setExportOptions: (o: Partial<ExportOptions>) => void;
+   184→   184→
+   185→   185→  // Misc UI
+   186→   186→  setPanelLayout: (l: "default" | "focus") => void;
+   187→   187→  toggleGrid: () => void;
+   188→   188→  toggleSafeArea: () => void;
+   189→   189→  toggleRulers: () => void;
+   190→   190→  setDrawingBuffer: (c: HTMLCanvasElement | null) => void;
+   191→   191→
+   192→   192→  // Undo / Redo multinivel
+   193→   193→  pushHistory: (drawingId: ID, prevDataUrl: string, newDataUrl: string) => void;
+   194→   194→  undo: () => void;
+   195→   195→  redo: () => void;
+   196→   196→  canUndo: () => boolean;
+   197→   197→  canRedo: () => boolean;
+   198→   198→
+   199→   199→  // Placement de imagen (modo transformación de imagen importada)
+   200→   200→  startImagePlacement: (dataUrl: string, nativeW: number, nativeH: number) => void;
+   201→   201→  updateImagePlacement: (patch: Partial<ImagePlacement>) => void;
+   202→   202→  confirmImagePlacement: () => Promise<void>;
+   203→   203→  cancelImagePlacement: () => void;
+   204→   204→
+   205→   205→  // Autosave
+   206→   206→  triggerAutosave: () => Promise<void>;
+   207→   207→}
+   208→   208→
+   209→   209→// ---------------------------------------------------------------------------
+   210→   210→// Tipo para entradas del stack de undo/redo
+   211→   211→// ---------------------------------------------------------------------------
+   212→   212→
+   213→   213→interface HistoryEntry {
+   214→   214→  drawingId: ID;
+   215→   215→  prevDataUrl: string;
+   216→   216→  newDataUrl: string;
+   217→   217→}
+   218→   218→
+   219→   219→// ---------------------------------------------------------------------------
+   220→   220→// Tipo para el placement de imagen (transformación interactiva)
+   221→   221→// ---------------------------------------------------------------------------
+   222→   222→
+   223→   223→interface ImagePlacement {
+   224→   224→  dataUrl: string;        // imagen original (data URL)
+   225→   225→  x: number;               // posición x en coords del canvas (esquina sup-izq)
+   226→   226→  y: number;               // posición y
+   227→   227→  width: number;           // ancho actual (preserva aspect ratio)
+   228→   228→  height: number;          // alto actual
+   229→   229→  nativeW: number;         // ancho original de la imagen (px)
+   230→   230→  nativeH: number;         // alto original (px)
+   231→   231→}
+   232→   232→
+   233→   233→// ---------------------------------------------------------------------------
+   234→   234→// Helpers internos
+   235→   235→// ---------------------------------------------------------------------------
+   236→   236→
+   237→   237→function updateProject(
+   238→   238→  state: AppState,
+   239→   239→  updater: (p: AnimationProject) => AnimationProject
+   240→   240→): Partial<AppState> {
+   241→   241→  if (!state.project) return {};
+   242→   242→  const newProject = updater({ ...state.project, dirty: true, updatedAt: Date.now() });
+   243→   243→  return { project: newProject };
+   244→   244→}
+   245→   245→
+   246→   246→// ---------------------------------------------------------------------------
+   247→   247→// Store
+   248→   248→// ---------------------------------------------------------------------------
+   249→   249→
+   250→   250→export const useStore = create<AppState>((set, get) => ({
+   251→   251→  projects: [],
+   252→   252→  projectsLoading: false,
+   253→   253→  project: null,
+   254→   254→
+   255→   255→  currentTool: "pencil",
+   256→   256→  brush: { ...DEFAULT_BRUSH },
+   257→   257→  onion: { ...DEFAULT_ONION },
+   258→   258→  playback: {
+   259→   259→    playing: false,
+   260→   260→    looping: true,
+   261→   261→    speed: 1,
+   262→   262→    rangeStart: null,
+   263→   263→    rangeEnd: null,
+   264→   264→  },
+   265→   265→  canvasView: { zoom: 1, panX: 0, panY: 0, rotation: 0 },
+   266→   266→  viewMode: "edit",
+   267→   267→  exportOptions: {
+   268→   268→    format: "mp4",
+   269→   269→    width: DEFAULT_SETTINGS.width,
+   270→   270→    height: DEFAULT_SETTINGS.height,
+   271→   271→    fps: DEFAULT_SETTINGS.fps,
+   272→   272→    rangeStart: 0,
+   273→   273→    rangeEnd: 0,
+   274→   274→    includeAudio: true,
+   275→   275→    quality: 0.92,
+   276→   276→    backgroundColor: "#ffffff",
+   277→   277→  },
+   278→   278→
+   279→   279→  panelLayout: "default",
+   280→   280→  showGrid: false,
+   281→   281→  showSafeArea: false,
+   282→   282→  showRulers: false,
+   283→   283→  thumbnailCache: {},
+   284→   284→  isAutosaving: false,
+   285→   285→  lastAutosaveAt: null,
+   286→   286→  drawingBuffer: null,
+   287→   287→  // Pilas de undo/redo (no persistidas)
+   288→   288→  undoStack: [] as HistoryEntry[],
+   289→   289→  redoStack: [] as HistoryEntry[],
+   290→   290→  // Indicador para evitar que el motor de dibujo recargue el canvas
+   291→   291→  // cuando se hace undo/redo (la imagen cacheada ya está actualizada)
+   292→   292→  skipReloadOnHistory: false,
+   293→   293→  // Placement de imagen (transformación interactiva)
+   294→   294→  imagePlacement: null as ImagePlacement | null,
+   295→   295→
+   296→   296→  // -------------------------------------------------------------------------
+   297→   297→  // Projects
+   298→   298→  // -------------------------------------------------------------------------
+   299→   299→
+   300→   300→  refreshProjects: async () => {
+   301→   301→    set({ projectsLoading: true });
+   302→   302→    const projects = await listProjectsFromDb();
+   303→   303→    set({ projects, projectsLoading: false });
+   304→   304→  },
+   305→   305→
+   306→   306→  newProject: async (name) => {
+   307→   307→    const project = createBlankProject(name);
+   308→   308→    await saveProjectToDb(project);
+   309→   309→    set({ project, projects: [project, ...get().projects] });
+   310→   310→    return project;
+   311→   311→  },
+   312→   312→
+   313→   313→  openProject: async (id) => {
+   314→   314→    const project = await loadProjectFromDb(id);
+   315→   315→    if (project) {
+   316→   316→      set({ project, canvasView: { zoom: 1, panX: 0, panY: 0, rotation: 0 } });
+   317→   317→    }
+   318→   318→  },
+   319→   319→
+   320→   320→  saveCurrent: async () => {
+   321→   321→    const p = get().project;
+   322→   322→    if (!p) return;
+   323→   323→    await saveProjectToDb(p);
+   324→   324→    set({
+   325→   325→      projects: [p, ...get().projects.filter((x) => x.id !== p.id)],
+   326→   326→      isAutosaving: false,
+   327→   327→      lastAutosaveAt: Date.now(),
+   328→   328→    });
+   329→   329→    set((s) => (s.project ? { project: { ...s.project, dirty: false } } : {}));
+   330→   330→  },
+   331→   331→
+   332→   332→  duplicateCurrent: async (newName) => {
+   333→   333→    const p = get().project;
+   334→   334→    if (!p) return;
+   335→   335→    const copy = await duplicateProjectInDb(p.id, newName);
+   336→   336→    if (copy) {
+   337→   337→      set({ project: copy, projects: [copy, ...get().projects] });
+   338→   338→    }
+   339→   339→  },
+   340→   340→
+   341→   341→  deleteProject: async (id) => {
+   342→   342→    await deleteProjectFromDb(id);
+   343→   343→    const p = get().project;
+   344→   344→    if (p && p.id === id) {
+   345→   345→      set({ project: null });
+   346→   346→    }
+   347→   347→    set({ projects: get().projects.filter((x) => x.id !== id) });
+   348→   348→  },
+   349→   349→
+   350→   350→  closeProject: () => set({ project: null }),
+   351→   351→
+   352→   352→  exportProject: () => get().project,
+   353→   353→
+   354→   354→  // -------------------------------------------------------------------------
+   355→   355→  // Tools
+   356→   356→  // -------------------------------------------------------------------------
+   357→   357→
+   358→   358→  setTool: (tool) => set({ currentTool: tool }),
+   359→   359→  setBrush: (b) => set((s) => ({ brush: { ...s.brush, ...b } })),
+   360→   360→
+   361→   361→  setOnion: (o) => set((s) => ({ onion: { ...s.onion, ...o } })),
+   362→   362→
+   363→   363→  togglePlay: () => set((s) => ({ playback: { ...s.playback, playing: !s.playback.playing } })),
+   364→   364→  setPlaying: (p) => set((s) => ({ playback: { ...s.playback, playing: p } })),
+   365→   365→  setLooping: (l) => set((s) => ({ playback: { ...s.playback, looping: l } })),
+   366→   366→  setPlaybackFps: (fps) => set((s) => ({ playback: { ...s.playback, playbackFps: Math.max(1, fps) } })),
+   367→   367→  setRange: (start, end) =>
+   368→   368→    set((s) => ({ playback: { ...s.playback, rangeStart: start, rangeEnd: end } })),
+   369→   369→
+   370→   370→  setCanvasView: (v) => set((s) => ({ canvasView: { ...s.canvasView, ...v } })),
+   371→   371→  resetCanvasView: () => set({ canvasView: { zoom: 1, panX: 0, panY: 0, rotation: 0 } }),
+   372→   372→
+   373→   373→  gotoFrame: (frame) =>
+   374→   374→    set((s) =>
+   375→   375→      s.project
+   376→   376→        ? { project: { ...s.project, currentFrame: Math.max(0, frame) } }
+   377→   377→        : {}
+   378→   378→    ),
+   379→   379→  nextFrame: () =>
+   380→   380→    set((s) =>
+   381→   381→      s.project
+   382→   382→        ? { project: { ...s.project, currentFrame: s.project.currentFrame + 1 } }
+   383→   383→        : {}
+   384→   384→    ),
+   385→   385→  prevFrame: () =>
+   386→   386→    set((s) =>
+   387→   387→      s.project && s.project.currentFrame > 0
+   388→   388→        ? { project: { ...s.project, currentFrame: s.project.currentFrame - 1 } }
+   389→   389→        : {}
+   390→   390→    ),
+   391→   391→  setViewMode: (m) => set({ viewMode: m }),
+   392→   392→
+   393→   393→  setProjectSettings: (settings) =>
+   394→   394→    set((s) =>
+   395→   395→      s.project
+   396→   396→        ? {
+   397→   397→            project: {
+   398→   398→              ...s.project,
+   399→   399→              settings: { ...s.project.settings, ...settings },
+   400→   400→              dirty: true,
+   401→   401→              updatedAt: Date.now(),
+   402→   402→            },
+   403→   403→          }
+   404→   404→        : {}
+   405→   405→    ),
+   406→   406→
+   407→   407→  renameProject: (name) =>
+   408→   408→    set((s) =>
+   409→   409→      s.project
+   410→   410→        ? { project: { ...s.project, name, dirty: true, updatedAt: Date.now() } }
+   411→   411→        : {}
+   412→   412→    ),
+   413→   413→
+   414→   414→  // -------------------------------------------------------------------------
+   415→   415→  // Layers
+   416→   416→  // -------------------------------------------------------------------------
+   417→   417→
+   418→   418→  addLayer: (type, name) => {
+   419→   419→    const state = get();
+   420→   420→    if (!state.project) return "";
+   421→   421→    const id = genId("layer");
+   422→   422→    const newLayer: Layer = {
+   423→   423→      id,
+   424→   424→      name: name ?? `${type === "draw" ? "Capa de dibujo" : type === "reference" ? "Referencia" : type === "background" ? "Fondo" : "Audio"} ${state.project.layers.length + 1}`,
+   425→   425→      type,
+   426→   426→      cells: type === "draw" || type === "reference" || type === "background"
+   427→   427→        ? [{ id: genId("cell"), drawingId: null, startFrame: 0, duration: 1 }]
+   428→   428→        : [],
+   429→   429→      visible: true,
+   430→   430→      locked: false,
+   431→   431→      opacity: 1,
+   432→   432→      createdAt: Date.now(),
+   433→   433→    };
+   434→   434→    set(updateProject(state, (p) => ({
+   435→   435→      ...p,
+   436→   436→      layers: [...p.layers, newLayer],
+   437→   437→      currentLayerId: id,
+   438→   438→    })));
+   439→   439→    return id;
+   440→   440→  },
+   441→   441→
+   442→   442→  deleteLayer: (id) => {
+   443→   443→    const state = get();
+   444→   444→    if (!state.project) return;
+   445→   445→    if (state.project.layers.length <= 1) return;
+   446→   446→    set(updateProject(state, (p) => ({
+   447→   447→      ...p,
+   448→   448→      layers: p.layers.filter((l) => l.id !== id),
+   449→   449→      currentLayerId: p.currentLayerId === id ? p.layers[0].id : p.currentLayerId,
+   450→   450→    })));
+   451→   451→  },
+   452→   452→
+   453→   453→  selectLayer: (id) =>
+   454→   454→    set((s) =>
+   455→   455→      s.project ? { project: { ...s.project, currentLayerId: id } } : {}
+   456→   456→    ),
+   457→   457→
+   458→   458→  renameLayer: (id, name) => {
+   459→   459→    const state = get();
+   460→   460→    if (!state.project) return;
+   461→   461→    set(updateProject(state, (p) => ({
+   462→   462→      ...p,
+   463→   463→      layers: p.layers.map((l) => (l.id === id ? { ...l, name } : l)),
+   464→   464→    })));
+   465→   465→  },
+   466→   466→
+   467→   467→  toggleLayerVisible: (id) => {
+   468→   468→    const state = get();
+   469→   469→    if (!state.project) return;
+   470→   470→    set(updateProject(state, (p) => ({
+   471→   471→      ...p,
+   472→   472→      layers: p.layers.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l)),
+   473→   473→    })));
+   474→   474→  },
+   475→   475→
+   476→   476→  toggleLayerLocked: (id) => {
+   477→   477→    const state = get();
+   478→   478→    if (!state.project) return;
+   479→   479→    set(updateProject(state, (p) => ({
+   480→   480→      ...p,
+   481→   481→      layers: p.layers.map((l) => (l.id === id ? { ...l, locked: !l.locked } : l)),
+   482→   482→    })));
+   483→   483→  },
+   484→   484→
+   485→   485→  setLayerOpacity: (id, opacity) => {
+   486→   486→    const state = get();
+   487→   487→    if (!state.project) return;
+   488→   488→    set(updateProject(state, (p) => ({
+   489→   489→      ...p,
+   490→   490→      layers: p.layers.map((l) => (l.id === id ? { ...l, opacity } : l)),
+   491→   491→    })));
+   492→   492→  },
+   493→   493→
+   494→   494→  moveLayer: (id, dir) => {
+   495→   495→    const state = get();
+   496→   496→    if (!state.project) return;
+   497→   497→    set(updateProject(state, (p) => {
+   498→   498→      const layers = [...p.layers];
+   499→   499→      const idx = layers.findIndex((l) => l.id === id);
+   500→   500→      if (idx < 0) return p;
+   501→   501→      const target = dir === "up" ? idx - 1 : idx + 1;
+   502→   502→      if (target < 0 || target >= layers.length) return p;
+   503→   503→      [layers[idx], layers[target]] = [layers[target], layers[idx]];
+   504→   504→      return { ...p, layers };
+   505→   505→    }));
+   506→   506→  },
+   507→   507→
+   508→   508→  duplicateLayer: (id) => {
+   509→   509→    const state = get();
+   510→   510→    if (!state.project) return;
+   511→   511→    set(updateProject(state, (p) => {
+   512→   512→      const layer = p.layers.find((l) => l.id === id);
+   513→   513→      if (!layer) return p;
+   514→   514→      const newId = genId("layer");
+   515→   515→      const newLayer: Layer = {
+   516→   516→        ...layer,
+   517→   517→        id: newId,
+   518→   518→        name: `${layer.name} (copia)`,
+   519→   519→        cells: layer.cells.map((c) => ({ ...c, id: genId("cell") })),
+   520→   520→        createdAt: Date.now(),
+   521→   521→      };
+   522→   522→      const idx = p.layers.findIndex((l) => l.id === id);
+   523→   523→      const layers = [...p.layers];
+   524→   524→      layers.splice(idx + 1, 0, newLayer);
+   525→   525→      return { ...p, layers, currentLayerId: newId };
+   526→   526→    }));
+   527→   527→  },
+   528→   528→
+   529→   529→  // -------------------------------------------------------------------------
+   530→   530→  // Cells / drawings
+   531→   531→  // -------------------------------------------------------------------------
+   532→   532→
+   533→   533→  ensureDrawingForCell: async (layerId, frame) => {
+   534→   534→    const state = get();
+   535→   535→    if (!state.project) throw new Error("No project");
+   536→   536→    const layer = state.project.layers.find((l) => l.id === layerId);
+   537→   537→    if (!layer) throw new Error("Layer not found");
+   538→   538→
+   539→   539→    // Buscar celda existente en este frame
+   540→   540→    const existing = layer.cells.find(
+   541→   541→      (c) => frame >= c.startFrame && frame < c.startFrame + c.duration
+   542→   542→    );
+   543→   543→
+   544→   544→    if (existing && existing.drawingId) {
+   545→   545→      return existing.drawingId;
+   546→   546→    }
+   547→   547→
+   548→   548→    // Crear nuevo Drawing vacío
+   549→   549→    const drawingId = genId("draw");
+   550→   550→    const now = Date.now();
+   551→   551→    const canvas = document.createElement("canvas");
+   552→   552→    canvas.width = state.project.settings.width;
+   553→   553→    canvas.height = state.project.settings.height;
+   554→   554→    const dataUrl = canvas.toDataURL("image/png");
+   555→   555→
+   556→   556→    const drawing: Drawing = {
+   557→   557→      id: drawingId,
+   558→   558→      name: `Drawing ${Object.keys(state.project.drawings).length + 1}`,
+   559→   559→      dataUrl,
+   560→   560→      width: state.project.settings.width,
+   561→   561→      height: state.project.settings.height,
+   562→   562→      createdAt: now,
+   563→   563→      updatedAt: now,
+   564→   564→    };
+   565→   565→
+   566→   566→    set(updateProject(state, (p) => {
+   567→   567→      const layers = p.layers.map((l) => {
+   568→   568→        if (l.id !== layerId) return l;
+   569→   569→        const cells = [...l.cells];
+   570→   570→        // Si existe celda en este frame, asignarle el drawingId
+   571→   571→        const cell = cells.find(
+   572→   572→          (c) => frame >= c.startFrame && frame < c.startFrame + c.duration
+   573→   573→        );
+   574→   574→        if (cell) {
+   575→   575→          const idx = cells.indexOf(cell);
+   576→   576→          cells[idx] = { ...cell, drawingId };
+   577→   577→        } else {
+   578→   578→          // Crear nueva celda
+   579→   579→          cells.push({ id: genId("cell"), drawingId, startFrame: frame, duration: 1 });
+   580→   580→          cells.sort((a, b) => a.startFrame - b.startFrame);
+   581→   581→        }
+   582→   582→        return { ...l, cells };
+   583→   583→      });
+   584→   584→      return {
+   585→   585→        ...p,
+   586→   586→        layers,
+   587→   587→        drawings: { ...p.drawings, [drawingId]: drawing },
+   588→   588→      };
+   589→   589→    }));
+   590→   590→
+   591→   591→    return drawingId;
+   592→   592→  },
+   593→   593→
+   594→   594→  setCellDrawing: (layerId, frame, drawingId) => {
+   595→   595→    const state = get();
+   596→   596→    if (!state.project) return;
+   597→   597→    set(updateProject(state, (p) => {
+   598→   598→      const layers = p.layers.map((l) => {
+   599→   599→        if (l.id !== layerId) return l;
+   600→   600→        const cells = [...l.cells];
+   601→   601→        const cell = cells.find(
+   602→   602→          (c) => frame >= c.startFrame && frame < c.startFrame + c.duration
+   603→   603→        );
+   604→   604→        if (cell) {
+   605→   605→          const idx = cells.indexOf(cell);
+   606→   606→          cells[idx] = { ...cell, drawingId };
+   607→   607→        }
+   608→   608→        return { ...l, cells };
+   609→   609→      });
+   610→   610→      return { ...p, layers };
+   611→   611→    }));
+   612→   612→  },
+   613→   613→
+   614→   614→  extendCell: (layerId, frame, delta) => {
+   615→   615→    const state = get();
+   616→   616→    if (!state.project) return;
+   617→   617→    set(updateProject(state, (p) => {
+   618→   618→      const layers = p.layers.map((l) => {
+   619→   619→        if (l.id !== layerId) return l;
+   620→   620→        const cells = [...l.cells];
+   621→   621→        const cell = cells.find(
+   622→   622→          (c) => frame >= c.startFrame && frame < c.startFrame + c.duration
+   623→   623→        );
+   624→   624→        if (cell) {
+   625→   625→          const idx = cells.indexOf(cell);
+   626→   626→          const newDuration = Math.max(1, cell.duration + delta);
+   627→   627→          cells[idx] = { ...cell, duration: newDuration };
+   628→   628→        }
+   629→   629→        return { ...l, cells };
+   630→   630→      });
+   631→   631→      return { ...p, layers };
+   632→   632→    }));
+   633→   633→  },
+   634→   634→
+   635→   635→  insertEmptyFrame: (layerId, frame) => {
+   636→   636→    const state = get();
+   637→   637→    if (!state.project) return;
+   638→   638→    set(updateProject(state, (p) => {
+   639→   639→      const layers = p.layers.map((l) => {
+   640→   640→        if (l.id !== layerId) return l;
+   641→   641→        const cells = [...l.cells];
+   642→   642→        // Avanzar todas las celdas en o después del frame
+   643→   643→        const newCells = cells
+   644→   644→          .map((c) =>
+   645→   645→            c.startFrame >= frame
+   646→   646→              ? { ...c, startFrame: c.startFrame + 1, id: genId("cell") }
+   647→   647→              : c
+   648→   648→          )
+   649→   649→          .filter((c) => c.startFrame < totalFrames([{ cells }]) + 1);
+   650→   650→        // Agregar nueva celda vacía
+   651→   651→        newCells.push({
+   652→   652→          id: genId("cell"),
+   653→   653→          drawingId: null,
+   654→   654→          startFrame: frame,
+   655→   655→          duration: 1,
+   656→   656→        });
+   657→   657→        newCells.sort((a, b) => a.startFrame - b.startFrame);
+   658→   658→        return { ...l, cells: newCells };
+   659→   659→      });
+   660→   660→      return { ...p, layers };
+   661→   661→    }));
+   662→   662→  },
+   663→   663→
+   664→   664→  removeCell: (layerId, cellId) => {
+   665→   665→    const state = get();
+   666→   666→    if (!state.project) return;
+   667→   667→    set(updateProject(state, (p) => {
+   668→   668→      const layers = p.layers.map((l) => {
+   669→   669→        if (l.id !== layerId) return l;
+   670→   670→        return { ...l, cells: l.cells.filter((c) => c.id !== cellId) };
+   671→   671→      });
+   672→   672→      return { ...p, layers };
+   673→   673→    }));
+   674→   674→  },
+   675→   675→
+   676→   676→  duplicateCell: (layerId, cellId) => {
+   677→   677→    const state = get();
+   678→   678→    if (!state.project) return;
+   679→   679→    set(updateProject(state, (p) => {
+   680→   680→      const layers = p.layers.map((l) => {
+   681→   681→        if (l.id !== layerId) return l;
+   682→   682→        const cell = l.cells.find((c) => c.id === cellId);
+   683→   683→        if (!cell) return l;
+   684→   684→        const newDrawingId = cell.drawingId ? genId("draw") : null;
+   685→   685→        let drawings = p.drawings;
+   686→   686→        if (newDrawingId && cell.drawingId) {
+   687→   687→          const orig = p.drawings[cell.drawingId];
+   688→   688→          if (orig) {
+   689→   689→            drawings = {
+   690→   690→              ...drawings,
+   691→   691→              [newDrawingId]: {
+   692→   692→                ...orig,
+   693→   693→                id: newDrawingId,
+   694→   694→                name: `${orig.name} (copia)`,
+   695→   695→                createdAt: Date.now(),
+   696→   696→                updatedAt: Date.now(),
+   697→   697→              },
+   698→   698→            };
+   699→   699→          }
+   700→   700→        }
+   701→   701→        const newCell: Cell = {
+   702→   702→          ...cell,
+   703→   703→          id: genId("cell"),
+   704→   704→          drawingId: newDrawingId,
+   705→   705→          startFrame: cell.startFrame + cell.duration,
+   706→   706→        };
+   707→   707→        return { ...l, cells: [...l.cells, newCell].sort((a, b) => a.startFrame - b.startFrame) };
+   708→   708→      });
+   709→   709→      return { ...p, layers };
+   710→   710→    }));
+   711→   711→  },
+   712→   712→
+   713→   713→  moveCell: (layerId, cellId, newFrame) => {
+   714→   714→    const state = get();
+   715→   715→    if (!state.project) return;
+   716→   716→    set(updateProject(state, (p) => {
+   717→   717→      const layers = p.layers.map((l) => {
+   718→   718→        if (l.id !== layerId) return l;
+   719→   719→        const cells = l.cells.map((c) =>
+   720→   720→          c.id === cellId ? { ...c, startFrame: Math.max(0, newFrame) } : c
+   721→   721→        );
+   722→   722→        cells.sort((a, b) => a.startFrame - b.startFrame);
+   723→   723→        return { ...l, cells };
+   724→   724→      });
+   725→   725→      return { ...p, layers };
+   726→   726→    }));
+   727→   727→  },
+   728→   728→
+   729→   729→  setCellLabel: (layerId, cellId, label) => {
+   730→   730→    const state = get();
+   731→   731→    if (!state.project) return;
+   732→   732→    set(updateProject(state, (p) => {
+   733→   733→      const layers = p.layers.map((l) => {
+   734→   734→        if (l.id !== layerId) return l;
+   735→   735→        return {
+   736→   736→          ...l,
+   737→   737→          cells: l.cells.map((c) => (c.id === cellId ? { ...c, label } : c)),
+   738→   738→        };
+   739→   739→      });
+   740→   740→      return { ...p, layers };
+   741→   741→    }));
+   742→   742→  },
+   743→   743→
+   744→   744→  setFrameLabel: (layerId, frame, label) => {
+   745→   745→    const state = get();
+   746→   746→    if (!state.project) return;
+   747→   747→    set(updateProject(state, (p) => {
+   748→   748→      const layers = p.layers.map((l) => {
+   749→   749→        if (l.id !== layerId) return l;
+   750→   750→        return {
+   751→   751→          ...l,
+   752→   752→          frameLabels: { ...(l.frameLabels ?? {}), [frame]: label as any },
+   753→   753→        };
+   754→   754→      });
+   755→   755→      return { ...p, layers };
+   756→   756→    }));
+   757→   757→  },
+   758→   758→
+   759→   759→  // -------------------------------------------------------------------------
+   760→   760→  // Drawings
+   761→   761→  // -------------------------------------------------------------------------
+   762→   762→
+   763→   763→  addDrawing: (drawing) => {
+   764→   764→    const state = get();
+   765→   765→    if (!state.project) return;
+   766→   766→    set(updateProject(state, (p) => ({
+   767→   767→      ...p,
+   768→   768→      drawings: { ...p.drawings, [drawing.id]: drawing },
+   769→   769→    })));
+   770→   770→  },
+   771→   771→
+   772→   772→  updateDrawing: async (id, dataUrl) => {
+   773→   773→    const state = get();
+   774→   774→    if (!state.project) return;
+   775→   775→    const drawing = state.project.drawings[id];
+   776→   776→    if (!drawing) return;
+   777→   777→    set(updateProject(state, (p) => ({
+   778→   778→      ...p,
+   779→   779→      drawings: {
+   780→   780→        ...p.drawings,
+   781→   781→        [id]: { ...drawing, dataUrl, updatedAt: Date.now() },
+   782→   782→      },
+   783→   783→    })));
+   784→   784→  },
+   785→   785→
+   786→   786→  deleteDrawing: (id) => {
+   787→   787→    const state = get();
+   788→   788→    if (!state.project) return;
+   789→   789→    set(updateProject(state, (p) => {
+   790→   790→      const drawings = { ...p.drawings };
+   791→   791→      delete drawings[id];
+   792→   792→      const layers = p.layers.map((l) => ({
+   793→   793→        ...l,
+   794→   794→        cells: l.cells.map((c) => (c.drawingId === id ? { ...c, drawingId: null } : c)),
+   795→   795→      }));
+   796→   796→      return { ...p, drawings, layers };
+   797→   797→    }));
+   798→   798→  },
+   799→   799→
+   800→   800→  getDrawing: (id) => {
+   801→   801→    const p = get().project;
+   802→   802→    if (!p) return null;
+   803→   803→    return p.drawings[id] ?? null;
+   804→   804→  },
+   805→   805→
+   806→   806→  // -------------------------------------------------------------------------
+   807→   807→  // Markers
+   808→   808→  // -------------------------------------------------------------------------
+   809→   809→
+   810→   810→  addMarker: (frame, label, color) => {
+   811→   811→    const state = get();
+   812→   812→    if (!state.project) return;
+   813→   813→    const marker: Marker = { id: genId("mark"), frame, label, color };
+   814→   814→    set(updateProject(state, (p) => ({
+   815→   815→      ...p,
+   816→   816→      markers: [...p.markers, marker].sort((a, b) => a.frame - b.frame),
+   817→   817→    })));
+   818→   818→  },
+   819→   819→
+   820→   820→  deleteMarker: (id) => {
+   821→   821→    const state = get();
+   822→   822→    if (!state.project) return;
+   823→   823→    set(updateProject(state, (p) => ({
+   824→   824→      ...p,
+   825→   825→      markers: p.markers.filter((m) => m.id !== id),
+   826→   826→    })));
+   827→   827→  },
+   828→   828→
+   829→   829→  gotoNextMarker: () => {
+   830→   830→    const s = get();
+   831→   831→    if (!s.project) return;
+   832→   832→    const next = s.project.markers
+   833→   833→      .filter((m) => m.frame > s.project!.currentFrame)
+   834→   834→      .sort((a, b) => a.frame - b.frame)[0];
+   835→   835→    if (next) s.gotoFrame(next.frame);
+   836→   836→  },
+   837→   837→
+   838→   838→  gotoPrevMarker: () => {
+   839→   839→    const s = get();
+   840→   840→    if (!s.project) return;
+   841→   841→    const prev = s.project.markers
+   842→   842→      .filter((m) => m.frame < s.project!.currentFrame)
+   843→   843→      .sort((a, b) => b.frame - a.frame)[0];
+   844→   844→    if (prev) s.gotoFrame(prev.frame);
+   845→   845→  },
+   846→   846→
+   847→   847→  // -------------------------------------------------------------------------
+   848→   848→  // Audio
+   849→   849→  // -------------------------------------------------------------------------
+   850→   850→
+   851→   851→  addAudioClip: (clip) => {
+   852→   852→    const state = get();
+   853→   853→    if (!state.project) return;
+   854→   854→    set(updateProject(state, (p) => ({
+   855→   855→      ...p,
+   856→   856→      audioClips: { ...p.audioClips, [clip.id]: clip },
+   857→   857→    })));
+   858→   858→  },
+   859→   859→
+   860→   860→  deleteAudioClip: (id) => {
+   861→   861→    const state = get();
+   862→   862→    if (!state.project) return;
+   863→   863→    set(updateProject(state, (p) => {
+   864→   864→      const audioClips = { ...p.audioClips };
+   865→   865→      delete audioClips[id];
+   866→   866→      const layers = p.layers.map((l) =>
+   867→   867→        l.audioClipId === id ? { ...l, audioClipId: undefined } : l
+   868→   868→      );
+   869→   869→      return { ...p, audioClips, layers };
+   870→   870→    }));
+   871→   871→  },
+   872→   872→
+   873→   873→  setAudioClipStart: (id, frame) => {
+   874→   874→    const state = get();
+   875→   875→    if (!state.project) return;
+   876→   876→    set(updateProject(state, (p) => ({
+   877→   877→      ...p,
+   878→   878→      audioClips: {
+   879→   879→        ...p.audioClips,
+   880→   880→        [id]: { ...p.audioClips[id], startFrame: frame },
+   881→   881→      },
+   882→   882→    })));
+   883→   883→  },
+   884→   884→
+   885→   885→  toggleAudioMute: (id) => {
+   886→   886→    const state = get();
+   887→   887→    if (!state.project) return;
+   888→   888→    set(updateProject(state, (p) => ({
+   889→   889→      ...p,
+   890→   890→      audioClips: {
+   891→   891→        ...p.audioClips,
+   892→   892→        [id]: { ...p.audioClips[id], muted: !p.audioClips[id].muted },
+   893→   893→      },
+   894→   894→    })));
+   895→   895→  },
+   896→   896→
+   897→   897→  // -------------------------------------------------------------------------
+   898→   898→  // Buttons & actions
+   899→   899→  // -------------------------------------------------------------------------
+   900→   900→
+   901→   901→  addButton: (button) => {
+   902→   902→    const state = get();
+   903→   903→    const id = genId("btn");
+   904→   904→    if (!state.project) return id;
+   905→   905→    const fullButton: InteractiveButton = {
+   906→   906→      id,
+   907→   907→      name: button.name ?? `Botón ${state.project.buttons.length + 1}`,
+   908→   908→      x: button.x ?? 50,
+   909→   909→      y: button.y ?? 50,
+   910→   910→      width: button.width ?? 120,
+   911→   911→      height: button.height ?? 40,
+   912→   912→      label: button.label ?? "Botón",
+   913→   913→      color: button.color ?? "#e67e22",
+   914→   914→      visible: button.visible ?? true,
+   915→   915→      handlers: button.handlers ?? [],
+   916→   916→    };
+   917→   917→    set(updateProject(state, (p) => ({
+   918→   918→      ...p,
+   919→   919→      buttons: [...p.buttons, fullButton],
+   920→   920→    })));
+   921→   921→    return id;
+   922→   922→  },
+   923→   923→
+   924→   924→  updateButton: (id, patch) => {
+   925→   925→    const state = get();
+   926→   926→    if (!state.project) return;
+   927→   927→    set(updateProject(state, (p) => ({
+   928→   928→      ...p,
+   929→   929→      buttons: p.buttons.map((b) => (b.id === id ? { ...b, ...patch } : b)),
+   930→   930→    })));
+   931→   931→  },
+   932→   932→
+   933→   933→  deleteButton: (id) => {
+   934→   934→    const state = get();
+   935→   935→    if (!state.project) return;
+   936→   936→    set(updateProject(state, (p) => ({
+   937→   937→      ...p,
+   938→   938→      buttons: p.buttons.filter((b) => b.id !== id),
+   939→   939→    })));
+   940→   940→  },
+   941→   941→
+   942→   942→  addHandler: (buttonId, handler) => {
+   943→   943→    const state = get();
+   944→   944→    if (!state.project) return;
+   945→   945→    set(updateProject(state, (p) => ({
+   946→   946→      ...p,
+   947→   947→      buttons: p.buttons.map((b) =>
+   948→   948→        b.id === buttonId ? { ...b, handlers: [...b.handlers, handler] } : b
+   949→   949→      ),
+   950→   950→    })));
+   951→   951→  },
+   952→   952→
+   953→   953→  updateHandler: (buttonId, handlerId, patch) => {
+   954→   954→    const state = get();
+   955→   955→    if (!state.project) return;
+   956→   956→    set(updateProject(state, (p) => ({
+   957→   957→      ...p,
+   958→   958→      buttons: p.buttons.map((b) =>
+   959→   959→        b.id === buttonId
+   960→   960→          ? {
+   961→   961→              ...b,
+   962→   962→              handlers: b.handlers.map((h) =>
+   963→   963→                h.id === handlerId ? { ...h, ...patch } : h
+   964→   964→              ),
+   965→   965→            }
+   966→   966→          : b
+   967→   967→      ),
+   968→   968→    })));
+   969→   969→  },
+   970→   970→
+   971→   971→  deleteHandler: (buttonId, handlerId) => {
+   972→   972→    const state = get();
+   973→   973→    if (!state.project) return;
+   974→   974→    set(updateProject(state, (p) => ({
+   975→   975→      ...p,
+   976→   976→      buttons: p.buttons.map((b) =>
+   977→   977→        b.id === buttonId
+   978→   978→          ? { ...b, handlers: b.handlers.filter((h) => h.id !== handlerId) }
+   979→   979→          : b
+   980→   980→      ),
+   981→   981→    })));
+   982→   982→  },
+   983→   983→
+   984→   984→  addAction: (buttonId, handlerId, action) => {
+   985→   985→    const state = get();
+   986→   986→    if (!state.project) return;
+   987→   987→    set(updateProject(state, (p) => ({
+   988→   988→      ...p,
+   989→   989→      buttons: p.buttons.map((b) =>
+   990→   990→        b.id === buttonId
+   991→   991→          ? {
+   992→   992→              ...b,
+   993→   993→              handlers: b.handlers.map((h) =>
+   994→   994→                h.id === handlerId
+   995→   995→                  ? { ...h, actions: [...h.actions, action] }
+   996→   996→                  : h
+   997→   997→              ),
+   998→   998→            }
+   999→   999→          : b
+  1000→  1000→      ),
+  1001→  1001→    })));
+  1002→  1002→  },
+  1003→  1003→
+  1004→  1004→  updateAction: (buttonId, handlerId, actionId, patch) => {
+  1005→  1005→    const state = get();
+  1006→  1006→    if (!state.project) return;
+  1007→  1007→    set(updateProject(state, (p) => ({
+  1008→  1008→      ...p,
+  1009→  1009→      buttons: p.buttons.map((b) =>
+  1010→  1010→        b.id === buttonId
+  1011→  1011→          ? {
+  1012→  1012→              ...b,
+  1013→  1013→              handlers: b.handlers.map((h) =>
+  1014→  1014→                h.id === handlerId
+  1015→  1015→                  ? {
+  1016→  1016→                      ...h,
+  1017→  1017→                      actions: h.actions.map((a) =>
+  1018→  1018→                        a.id === actionId ? { ...a, ...patch } : a
+  1019→  1019→                      ),
+  1020→  1020→                    }
+  1021→  1021→                  : h
+  1022→  1022→              ),
+  1023→  1023→            }
+  1024→  1024→          : b
+  1025→  1025→      ),
+  1026→  1026→    })));
+  1027→  1027→  },
+  1028→  1028→
+  1029→  1029→  deleteAction: (buttonId, handlerId, actionId) => {
+  1030→  1030→    const state = get();
+  1031→  1031→    if (!state.project) return;
+  1032→  1032→    set(updateProject(state, (p) => ({
+  1033→  1033→      ...p,
+  1034→  1034→      buttons: p.buttons.map((b) =>
+  1035→  1035→        b.id === buttonId
+  1036→  1036→          ? {
+  1037→  1037→              ...b,
+  1038→  1038→              handlers: b.handlers.map((h) =>
+  1039→  1039→                h.id === handlerId
+  1040→  1040→                  ? { ...h, actions: h.actions.filter((a) => a.id !== actionId) }
+  1041→  1041→                  : h
+  1042→  1042→              ),
+  1043→  1043→            }
+  1044→  1044→          : b
+  1045→  1045→      ),
+  1046→  1046→    })));
+  1047→  1047→  },
+  1048→  1048→
+  1049→  1049→  // -------------------------------------------------------------------------
+  1050→  1050→  // Variables
+  1051→  1051→  // -------------------------------------------------------------------------
+  1052→  1052→
+  1053→  1053→  setVariable: (name, value) => {
+  1054→  1054→    const state = get();
+  1055→  1055→    if (!state.project) return;
+  1056→  1056→    set(updateProject(state, (p) => {
+  1057→  1057→      const others = p.variables.filter((v) => v.name !== name);
+  1058→  1058→      return { ...p, variables: [...others, { name, value }] };
+  1059→  1059→    }));
+  1060→  1060→  },
+  1061→  1061→
+  1062→  1062→  deleteVariable: (name) => {
+  1063→  1063→    const state = get();
+  1064→  1064→    if (!state.project) return;
+  1065→  1065→    set(updateProject(state, (p) => ({
+  1066→  1066→      ...p,
+  1067→  1067→      variables: p.variables.filter((v) => v.name !== name),
+  1068→  1068→    })));
+  1069→  1069→  },
+  1070→  1070→
+  1071→  1071→  // -------------------------------------------------------------------------
+  1072→  1072→  // Export options
+  1073→  1073→  // -------------------------------------------------------------------------
+  1074→  1074→
+  1075→  1075→  setExportOptions: (o) =>
+  1076→  1076→    set((s) => ({ exportOptions: { ...s.exportOptions, ...o } })),
+  1077→  1077→
+  1078→  1078→  // -------------------------------------------------------------------------
+  1079→  1079→  // Misc UI
+  1080→  1080→  // -------------------------------------------------------------------------
+  1081→  1081→
+  1082→  1082→  setPanelLayout: (l) => set({ panelLayout: l }),
+  1083→  1083→  toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
+  1084→  1084→  toggleSafeArea: () => set((s) => ({ showSafeArea: !s.showSafeArea })),
+  1085→  1085→  toggleRulers: () => set((s) => ({ showRulers: !s.showRulers })),
+  1086→  1086→  setDrawingBuffer: (c) => set({ drawingBuffer: c }),
+  1087→  1087→
+  1088→  1088→  // -------------------------------------------------------------------------
+  1089→  1089→  // Undo / Redo multinivel
+  1090→  1090→  // -------------------------------------------------------------------------
+  1091→  1091→
+  1092→  1092→  pushHistory: (drawingId, prevDataUrl, newDataUrl) => {
+  1093→  1093→    // Si prev y new son idénticos, no agregar entrada (no-op)
+  1094→  1094→    if (prevDataUrl === newDataUrl) return;
+  1095→  1095→    set((s) => ({
+  1096→  1096→      undoStack: [...s.undoStack, { drawingId, prevDataUrl, newDataUrl }].slice(-50),
+  1097→  1097→      redoStack: [], // Clear redo on new action
+  1098→  1098→    }));
+  1099→  1099→  },
+  1100→  1100→
+  1101→  1101→  undo: () => {
+  1102→  1102→    const s = get();
+  1103→  1103→    if (s.undoStack.length === 0) return;
+  1104→  1104→    const entry = s.undoStack[s.undoStack.length - 1];
+  1105→  1105→    // Restaurar el dataUrl anterior en el proyecto
+  1106→  1106→    set((st) => {
+  1107→  1107→      if (!st.project) return {};
+  1108→  1108→      if (!st.project.drawings[entry.drawingId]) return {};
+  1109→  1109→      const restored = {
+  1110→  1110→        ...st.project,
+  1111→  1111→        drawings: {
+  1112→  1112→          ...st.project.drawings,
+  1113→  1113→          [entry.drawingId]: {
+  1114→  1114→            ...st.project.drawings[entry.drawingId],
+  1115→  1115→            dataUrl: entry.prevDataUrl,
+  1116→  1116→            updatedAt: Date.now(),
+  1117→  1117→          },
+  1118→  1118→        },
+  1119→  1119→        dirty: true,
+  1120→  1120→        updatedAt: Date.now(),
+  1121→  1121→      };
+  1122→  1122→      return {
+  1123→  1123→        project: restored,
+  1124→  1124→        undoStack: st.undoStack.slice(0, -1),
+  1125→  1125→        redoStack: [...st.redoStack, entry],
+  1126→  1126→        skipReloadOnHistory: false,
+  1127→  1127→      };
+  1128→  1128→    });
+  1129→  1129→    // Pre-cachear la imagen restaurada
+  1130→  1130→    import("./useDrawingEngine").then(({ preloadImage }) => {
+  1131→  1131→      preloadImage(entry.drawingId, entry.prevDataUrl);
+  1132→  1132→    });
+  1133→  1133→  },
+  1134→  1134→
+  1135→  1135→  redo: () => {
+  1136→  1136→    const s = get();
+  1137→  1137→    if (s.redoStack.length === 0) return;
+  1138→  1138→    const entry = s.redoStack[s.redoStack.length - 1];
+  1139→  1139→    set((st) => {
+  1140→  1140→      if (!st.project) return {};
+  1141→  1141→      if (!st.project.drawings[entry.drawingId]) return {};
+  1142→  1142→      const restored = {
+  1143→  1143→        ...st.project,
+  1144→  1144→        drawings: {
+  1145→  1145→          ...st.project.drawings,
+  1146→  1146→          [entry.drawingId]: {
+  1147→  1147→            ...st.project.drawings[entry.drawingId],
+  1148→  1148→            dataUrl: entry.newDataUrl,
+  1149→  1149→            updatedAt: Date.now(),
+  1150→  1150→          },
+  1151→  1151→        },
+  1152→  1152→        dirty: true,
+  1153→  1153→        updatedAt: Date.now(),
+  1154→  1154→      };
+  1155→  1155→      return {
+  1156→  1156→        project: restored,
+  1157→  1157→        redoStack: st.redoStack.slice(0, -1),
+  1158→  1158→        undoStack: [...st.undoStack, entry],
+  1159→  1159→        skipReloadOnHistory: false,
+  1160→  1160→      };
+  1161→  1161→    });
+  1162→  1162→    import("./useDrawingEngine").then(({ preloadImage }) => {
+  1163→  1163→      preloadImage(entry.drawingId, entry.newDataUrl);
+  1164→  1164→    });
+  1165→  1165→  },
+  1166→  1166→
+  1167→  1167→  canUndo: () => get().undoStack.length > 0,
+  1168→  1168→  canRedo: () => get().redoStack.length > 0,
+  1169→  1169→
+  1170→  1170→  // -------------------------------------------------------------------------
+  1171→  1171→  // Placement de imagen (modo transformación de imagen importada)
+  1172→  1172→  // -------------------------------------------------------------------------
+  1173→  1173→
+  1174→  1174→  startImagePlacement: (dataUrl, nativeW, nativeH) => {
+  1175→  1175→    const s = get();
+  1176→  1176→    if (!s.project) return;
+  1177→  1177→    // Calcular tamaño inicial preservando aspect ratio:
+  1178→  1178→    // - Si la imagen es más chica que el canvas, usar tamaño nativo
+  1179→  1179→    // - Si es más grande, escalar para que entre (con margen del 10%)
+  1180→  1180→    const cw = s.project.settings.width;
+  1181→  1181→    const ch = s.project.settings.height;
+  1182→  1182→    const margin = 0.1; // 10% de margen
+  1183→  1183→    const maxW = cw * (1 - 2 * margin);
+  1184→  1184→    const maxH = ch * (1 - 2 * margin);
+  1185→  1185→    let w = nativeW;
+  1186→  1186→    let h = nativeH;
+  1187→  1187→    if (w > maxW || h > maxH) {
+  1188→  1188→      const scale = Math.min(maxW / w, maxH / h);
+  1189→  1189→      w = Math.round(w * scale);
+  1190→  1190→      h = Math.round(h * scale);
+  1191→  1191→    }
+  1192→  1192→    // Centrar en el canvas
+  1193→  1193→    const x = Math.round((cw - w) / 2);
+  1194→  1194→    const y = Math.round((ch - h) / 2);
+  1195→  1195→    set({
+  1196→  1196→      imagePlacement: {
+  1197→  1197→        dataUrl,
+  1198→  1198→        x,
+  1199→  1199→        y,
+  1200→  1200→        width: w,
+  1201→  1201→        height: h,
+  1202→  1202→        nativeW,
+  1203→  1203→        nativeH,
+  1204→  1204→      },
+  1205→  1205→    });
+  1206→  1206→  },
+  1207→  1207→
+  1208→  1208→  updateImagePlacement: (patch) => {
+  1209→  1209→    set((s) => ({
+  1210→  1210→      imagePlacement: s.imagePlacement ? { ...s.imagePlacement, ...patch } : null,
+  1211→  1211→    }));
+  1212→  1212→  },
+  1213→  1213→
+  1214→  1214→  confirmImagePlacement: async () => {
+  1215→  1215→    const s = get();
+  1216→  1216→    if (!s.project || !s.imagePlacement) return;
+  1217→  1217→    const placement = s.imagePlacement;
+  1218→  1218→    // Renderizar la imagen al tamaño actual en el canvas del drawing activo
+  1219→  1219→    // Crear nuevo drawing o usar el existente
+  1220→  1220→    const layer = s.project.layers.find((l) => l.id === s.project!.currentLayerId);
+  1221→  1221→    if (!layer || layer.locked || !layer.visible || layer.type === "audio") {
+  1222→  1222→      set({ imagePlacement: null });
+  1223→  1223→      return;
+  1224→  1224→    }
+  1225→  1225→
+  1226→  1226→    // Cargar la imagen
+  1227→  1227→    const img = await new Promise<HTMLImageElement | null>((resolve) => {
+  1228→  1228→      const i = new Image();
+  1229→  1229→      i.onload = () => resolve(i);
+  1230→  1230→      i.onerror = () => resolve(null);
+  1231→  1231→      i.src = placement.dataUrl;
+  1232→  1232→    });
+  1233→  1233→    if (!img) {
+  1234→  1234→      set({ imagePlacement: null });
+  1235→  1235→      return;
+  1236→  1236→    }
+  1237→  1237→
+  1238→  1238→    // Crear un canvas temporal con el contenido actual del drawing + la imagen pegada
+  1239→  1239→    const tmpCanvas = document.createElement("canvas");
+  1240→  1240→    tmpCanvas.width = s.project.settings.width;
+  1241→  1241→    tmpCanvas.height = s.project.settings.height;
+  1242→  1242→    const tmpCtx = tmpCanvas.getContext("2d")!;
+  1243→  1243→    // Si hay un drawing existente, dibujarlo primero
+  1244→  1244→    const cell = layer.cells.find(
+  1245→  1245→      (c) =>
+  1246→  1246→        s.project!.currentFrame >= c.startFrame &&
+  1247→  1247→        s.project!.currentFrame < c.startFrame + c.duration
+  1248→  1248→    );
+  1249→  1249→    if (cell?.drawingId) {
+  1250→  1250→      const existing = s.project.drawings[cell.drawingId];
+  1251→  1251→      if (existing) {
+  1252→  1252→        const existingImg = await new Promise<HTMLImageElement | null>((resolve) => {
+  1253→  1253→          const i = new Image();
+  1254→  1254→          i.onload = () => resolve(i);
+  1255→  1255→          i.onerror = () => resolve(null);
+  1256→  1256→          i.src = existing.dataUrl;
+  1257→  1257→        });
+  1258→  1258→        if (existingImg) {
+  1259→  1259→          tmpCtx.drawImage(existingImg, 0, 0, tmpCanvas.width, tmpCanvas.height);
+  1260→  1260→        }
+  1261→  1261→      }
+  1262→  1262→    }
+  1263→  1263→    // Dibujar la imagen colocada en su transformación final
+  1264→  1264→    tmpCtx.drawImage(img, placement.x, placement.y, placement.width, placement.height);
+  1265→  1265→    const finalDataUrl = tmpCanvas.toDataURL("image/png");
+  1266→  1266→
+  1267→  1267→    // Crear/actualizar el drawing con la imagen pegada
+  1268→  1268→    const drawingId = cell?.drawingId ?? crypto.randomUUID();
+  1269→  1269→    const now = Date.now();
+  1270→  1270→    const prevDataUrl = cell?.drawingId ? s.project.drawings[cell.drawingId]?.dataUrl ?? "" : "";
+  1271→  1271→
+  1272→  1272→    // Pre-cachear la imagen final
+  1273→  1273→    const { preloadImage } = await import("./useDrawingEngine");
+  1274→  1274→    await preloadImage(drawingId, finalDataUrl);
+  1275→  1275→
+  1276→  1276→    set((st) => {
+  1277→  1277→      if (!st.project) return {};
+  1278→  1278→      const layers = st.project.layers.map((l) => {
+  1279→  1279→        if (l.id !== layer.id) return l;
+  1280→  1280→        const cells = [...l.cells];
+  1281→  1281→        const existingCell = cells.find(
+  1282→  1282→          (c) =>
+  1283→  1283→            st.project!.currentFrame >= c.startFrame &&
+  1284→  1284→            st.project!.currentFrame < c.startFrame + c.duration
+  1285→  1285→        );
+  1286→  1286→        if (existingCell) {
+  1287→  1287→          const idx = cells.indexOf(existingCell);
+  1288→  1288→          cells[idx] = { ...existingCell, drawingId };
+  1289→  1289→        } else {
+  1290→  1290→          cells.push({
+  1291→  1291→            id: crypto.randomUUID(),
+  1292→  1292→            drawingId,
+  1293→  1293→            startFrame: st.project.currentFrame,
+  1294→  1294→            duration: 1,
+  1295→  1295→          });
+  1296→  1296→          cells.sort((a, b) => a.startFrame - b.startFrame);
+  1297→  1297→        }
+  1298→  1298→        return { ...l, cells };
+  1299→  1299→      });
+  1300→  1300→      return {
+  1301→  1301→        project: {
+  1302→  1302→          ...st.project,
+  1303→  1303→          layers,
+  1304→  1304→          drawings: {
+  1305→  1305→            ...st.project.drawings,
+  1306→  1306→            [drawingId]: {
+  1307→  1307→              id: drawingId,
+  1308→  1308→              name: "Imagen importada",
+  1309→  1309→              dataUrl: finalDataUrl,
+  1310→  1310→              width: st.project.settings.width,
+  1311→  1311→              height: st.project.settings.height,
+  1312→  1312→              createdAt: now,
+  1313→  1313→              updatedAt: now,
+  1314→  1314→            },
+  1315→  1315→          },
+  1316→  1316→          dirty: true,
+  1317→  1317→          updatedAt: now,
+  1318→  1318→        },
+  1319→  1319→        imagePlacement: null,
+  1320→  1320→      };
+  1321→  1321→    });
+  1322→  1322→
+  1323→  1323→    // Registrar en el stack de undo
+  1324→  1324→    if (prevDataUrl && prevDataUrl !== finalDataUrl) {
+  1325→  1325→      get().pushHistory(drawingId, prevDataUrl, finalDataUrl);
+  1326→  1326→    }
+  1327→  1327→  },
+  1328→  1328→
+  1329→  1329→  cancelImagePlacement: () => {
+  1330→  1330→    set({ imagePlacement: null });
+  1331→  1331→  },
+  1332→  1332→
+  1333→  1333→  triggerAutosave: async () => {
+  1334→  1334→    const s = get();
+  1335→  1335→    if (!s.project || !s.project.dirty) return;
+  1336→  1336→    set({ isAutosaving: true });
+  1337→  1337→    await saveProjectToDb(s.project);
+  1338→  1338→    set({
+  1339→  1339→      isAutosaving: false,
+  1340→  1340→      lastAutosaveAt: Date.now(),
+  1341→  1341→      projects: [s.project, ...s.projects.filter((x) => x.id !== s.project!.id)],
+  1342→  1342→    });
+  1343→  1343→    set((st) => (st.project ? { project: { ...st.project, dirty: false } } : {}));
+  1344→  1344→  },
+  1345→  1345→}));
+  1346→  1346→
+  1347→  1347→// ---------------------------------------------------------------------------
+  1348→  1348→// Selector de capas ordenadas para visualización (de arriba a abajo)
+  1349→  1349→// ---------------------------------------------------------------------------
+  1350→  1350→
+  1351→  1351→export function getOrderedLayers(project: AnimationProject): Layer[] {
+  1352→  1352→  return [...project.layers].reverse();
+  1353→  1353→}
+  1354→  1354→
+  1355→  1355→/** Devuelve la capa actualmente seleccionada. */
+  1356→  1356→export function getCurrentLayer(project: AnimationProject): Layer | null {
+  1357→  1357→  if (!project.currentLayerId) return null;
+  1358→  1358→  return project.layers.find((l) => l.id === project.currentLayerId) ?? null;
+  1359→  1359→}
+  1360→  1360→

@@ -18,6 +18,8 @@ import {
   drawInkDab,
   drawInkSegment,
   drawPencilDab,
+  drawWatercolorDab,
+  drawWatercolorSegment,
   floodFill,
   hexToRgb,
   screenToCanvas,
@@ -117,25 +119,47 @@ export function useDrawingEngine({
   // Modificador Z: mientras se mantiene Z apretado, el wheel y el drag
   // hacen zoom (arrastra hacia arriba = acerca, hacia abajo = aleja).
   const zModifierRef = useRef(false);
+  // Modificador X: mientras se mantiene X apretado, el trazo se convierte en
+  // goma (eraser) temporalmente. Es un acceso rápido para corregir.
+  const xModifierRef = useRef(false);
+  // Modificador C: mientras se mantiene C apretado, entra en modo pan.
+  const cModifierRef = useRef(false);
+  // Modificador Ctrl: mientras se mantiene Ctrl apretado + drag, entra en
+  // modo "resize brush" (cambiar tamaño del pincel arrastrando arriba/abajo).
+  const ctrlModifierRef = useRef(false);
+  const isResizingBrushRef = useRef(false);
+  const brushResizeStartRef = useRef<{ y: number; size: number } | null>(null);
   // Refs para selección (definidos al inicio del hook)
   const selectionBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const selectionImageRef = useRef<ImageData | null>(null);
 
-  // Listener para el modificador Z (keydown/keyup)
+  // Listener para los modificadores X (eraser), C (pan), Ctrl (brush resize) y Z (zoom)
   useEffect(() => {
+    const isInput = (el: EventTarget | null) => {
+      if (!el) return false;
+      const t = el as HTMLElement;
+      return t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT";
+    };
     const onDown = (e: KeyboardEvent) => {
-      // No interferir con inputs
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
-        return;
-      }
-      if (e.key === "z" || e.key === "Z") {
+      if (isInput(e.target)) return;
+      const k = e.key.toLowerCase();
+      if (k === "z") {
         zModifierRef.current = true;
+        useStore.setState({ zModifier: true });
+      } else if (k === "x") {
+        xModifierRef.current = true;
+        useStore.setState({ xModifier: true });
+      } else if (k === "c") {
+        cModifierRef.current = true;
+      } else if (k === "control") {
+        ctrlModifierRef.current = true;
       }
     };
     const onUp = (e: KeyboardEvent) => {
-      if (e.key === "z" || e.key === "Z") {
+      const k = e.key.toLowerCase();
+      if (k === "z") {
         zModifierRef.current = false;
+        useStore.setState({ zModifier: false });
         // Si estábamos paneando o zoomeando con Z, soltar
         if (isPanningRef.current) {
           isPanningRef.current = false;
@@ -145,10 +169,33 @@ export function useDrawingEngine({
           isZoomingRef.current = false;
           zoomStartRef.current = null;
         }
+      } else if (k === "x") {
+        xModifierRef.current = false;
+        useStore.setState({ xModifier: false });
+      } else if (k === "c") {
+        cModifierRef.current = false;
+        if (isPanningRef.current) {
+          isPanningRef.current = false;
+          panStartRef.current = null;
+        }
+      } else if (k === "control") {
+        ctrlModifierRef.current = false;
+        if (isResizingBrushRef.current) {
+          isResizingBrushRef.current = false;
+          brushResizeStartRef.current = null;
+        }
       }
     };
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup", onUp);
+    window.addEventListener("blur", () => {
+      // Si la ventana pierde foco, resetear todos los modificadores
+      zModifierRef.current = false;
+      xModifierRef.current = false;
+      cModifierRef.current = false;
+      ctrlModifierRef.current = false;
+      useStore.setState({ zModifier: false, xModifier: false });
+    });
     return () => {
       window.removeEventListener("keydown", onDown);
       window.removeEventListener("keyup", onUp);
@@ -268,7 +315,7 @@ export function useDrawingEngine({
     await updateDrawing(drawingId, dataUrl);
 
     // Registrar en el stack de undo (solo si cambió)
-    if (prevDataUrl && prevDataUrl !== dataUrl) {
+    if (prevDataUrl !== dataUrl) {
       useStore.getState().pushHistory(drawingId, prevDataUrl, dataUrl);
     }
 
@@ -286,7 +333,10 @@ export function useDrawingEngine({
       const layer = proj.layers.find((l) => l.id === proj.currentLayerId);
       if (!layer || layer.locked || !layer.visible || layer.type === "audio") return;
 
-      const tool = activeToolRef.current;
+      // El tool efectivo depende del modificador X (goma temporal).
+      // Si X está apretado, cualquier herramienta de trazo se convierte en goma.
+      const baseTool = activeToolRef.current;
+      const tool: ToolId = xModifierRef.current ? "eraser" : baseTool;
 
       // --- MODIFICADOR Z: si Z está apretado, entrar en modo zoom por arrastre ---
       // Arrastra hacia ARRIBA (dy<0) para acercar; hacia ABAJO (dy>0) para alejar.
@@ -295,9 +345,37 @@ export function useDrawingEngine({
         isPanningRef.current = false;
         isZoomingRef.current = true;
         isDrawingRef.current = false;
+        useStore.setState({ isDrawing: false });
         zoomStartRef.current = {
           y: e.clientY,
           zoom: activeCanvasViewRef.current.zoom,
+        };
+        return;
+      }
+
+      // --- MODIFICADOR C: si C está apretado, entrar en modo pan ---
+      if (cModifierRef.current) {
+        isPanningRef.current = true;
+        isDrawingRef.current = false;
+        useStore.setState({ isDrawing: false });
+        panStartRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          panX: activeCanvasViewRef.current.panX,
+          panY: activeCanvasViewRef.current.panY,
+        };
+        return;
+      }
+
+      // --- MODIFICADOR Ctrl: si Ctrl está apretado, entrar en modo resize brush ---
+      // Arrastra hacia ARRIBA para agrandar, hacia ABAJO para achicar.
+      if (ctrlModifierRef.current) {
+        isResizingBrushRef.current = true;
+        isDrawingRef.current = false;
+        useStore.setState({ isDrawing: false });
+        brushResizeStartRef.current = {
+          y: e.clientY,
+          size: activeBrushRef.current.size,
         };
         return;
       }
@@ -306,6 +384,7 @@ export function useDrawingEngine({
       if (tool === "pan") {
         isPanningRef.current = true;
         isDrawingRef.current = false;
+        useStore.setState({ isDrawing: false });
         panStartRef.current = {
           x: e.clientX,
           y: e.clientY,
@@ -355,6 +434,7 @@ export function useDrawingEngine({
         startPosRef.current = pt;
         lastPosRef.current = pt; // IMPORTANTE: necesario para que handleUp calcule bounds
         isDrawingRef.current = true;
+        useStore.setState({ isDrawing: true });
         return;
       }
 
@@ -366,7 +446,7 @@ export function useDrawingEngine({
       );
 
       let drawingId = cell?.drawingId ?? null;
-      if (!drawingId && (tool === "pencil" || tool === "brush" || tool === "ink" || tool === "eraser" || tool === "line" || tool === "rectangle" || tool === "ellipse" || tool === "fill")) {
+      if (!drawingId && (tool === "pencil" || tool === "brush" || tool === "ink" || tool === "watercolor" || tool === "eraser" || tool === "line" || tool === "rectangle" || tool === "ellipse" || tool === "fill")) {
         // Crear drawing vacío inmediatamente (síncrono)
         const newId = genId("draw");
         const now = Date.now();
@@ -440,6 +520,7 @@ export function useDrawingEngine({
       // y RESETEAR el smoother para que no quede con la posición del
       // trazo anterior (causaba el bug "raya al comenzar en cualquier dirección")
       isDrawingRef.current = true;
+      useStore.setState({ isDrawing: true });
       startPosRef.current = pt;
       lastPosRef.current = pt;
       smootherRef.current = createSmoother(activeBrushRef.current.smoothing);
@@ -467,14 +548,16 @@ export function useDrawingEngine({
         const color = hexToRgb(activeBrushRef.current.color);
         color.a = Math.round(activeBrushRef.current.opacity * 255);
         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        floodFill(imgData, pt.x, pt.y, color);
+        // Usar fillTolerance del pincel para la tolerancia del flood fill
+        floodFill(imgData, pt.x, pt.y, color, activeBrushRef.current.fillTolerance);
         ctx.putImageData(imgData, 0, 0);
         isDrawingRef.current = false;
+        useStore.setState({ isDrawing: false });
         await commitDrawing();
         return;
       }
 
-      // Lápiz, pincel, pluma de tinta, goma: trazar punto inicial
+      // Lápiz, pincel, pluma de tinta, acuarela, goma: trazar punto inicial
       const b = activeBrushRef.current;
       if (tool === "pencil") {
         // Lápiz: textura de mina de grafito
@@ -489,6 +572,12 @@ export function useDrawingEngine({
           ? b.size * Math.max(b.minSizePressure, pressureRef.current)
           : b.size;
         drawInkDab(ctx, pt.x, pt.y, size, b.color, b.opacity, pressureRef.current);
+      } else if (tool === "watercolor") {
+        // Acuarela: parche inicial translúcido
+        const size = b.pressureSensitivity
+          ? b.size * Math.max(b.minSizePressure, pressureRef.current)
+          : b.size;
+        drawWatercolorDab(ctx, pt.x, pt.y, size, b.color, b.opacity, pressureRef.current);
       } else if (tool === "brush") {
         // Pincel: trazo suave y redondo
         configureStroke(ctx, b, pressureRef.current);
@@ -521,7 +610,19 @@ export function useDrawingEngine({
         return;
       }
 
-      // Pan (tool "pan")
+      // Resize brush (modificador Ctrl apretado + drag)
+      // dy < 0 → agrandar; dy > 0 → achicar
+      if (isResizingBrushRef.current && brushResizeStartRef.current) {
+        const dy = e.clientY - brushResizeStartRef.current.y;
+        const startSize = brushResizeStartRef.current.size;
+        // Cada 100px de drag cambia el tamaño por un factor de 2
+        const factor = Math.exp(-dy / 200);
+        const newSize = Math.max(0.5, Math.min(200, startSize * factor));
+        useStore.getState().setBrush({ size: newSize });
+        return;
+      }
+
+      // Pan (tool "pan" o modificador C)
       if (isPanningRef.current && panStartRef.current) {
         const dx = e.clientX - panStartRef.current.x;
         const dy = e.clientY - panStartRef.current.y;
@@ -539,7 +640,8 @@ export function useDrawingEngine({
       const layer = proj.layers.find((l) => l.id === proj.currentLayerId);
       if (!layer || layer.locked || !layer.visible) return;
 
-      const tool = activeToolRef.current;
+      // El tool efectivo depende del modificador X (goma temporal).
+      const tool: ToolId = xModifierRef.current ? "eraser" : activeToolRef.current;
       const pt = getCanvasPoint(e.clientX, e.clientY);
       if (!pt || !startPosRef.current) return;
 
@@ -591,6 +693,26 @@ export function useDrawingEngine({
         const smoothed = smoothPoint(smootherRef.current, pt.x, pt.y);
         if (lastPosRef.current) {
           drawInkSegment(
+            ctx,
+            lastPosRef.current.x,
+            lastPosRef.current.y,
+            smoothed.x,
+            smoothed.y,
+            size,
+            b.color,
+            b.opacity,
+            pressureRef.current
+          );
+        }
+        lastPosRef.current = smoothed;
+      } else if (tool === "watercolor") {
+        // Acuarela: trazo translúcido acumulativo
+        const size = b.pressureSensitivity
+          ? b.size * Math.max(b.minSizePressure, pressureRef.current)
+          : b.size;
+        const smoothed = smoothPoint(smootherRef.current, pt.x, pt.y);
+        if (lastPosRef.current) {
+          drawWatercolorSegment(
             ctx,
             lastPosRef.current.x,
             lastPosRef.current.y,
@@ -665,6 +787,12 @@ export function useDrawingEngine({
         zoomStartRef.current = null;
         return;
       }
+      // Brush resize fin
+      if (isResizingBrushRef.current) {
+        isResizingBrushRef.current = false;
+        brushResizeStartRef.current = null;
+        return;
+      }
       // Pan fin
       if (isPanningRef.current) {
         isPanningRef.current = false;
@@ -674,8 +802,9 @@ export function useDrawingEngine({
 
       if (!isDrawingRef.current) return;
       isDrawingRef.current = false;
+      useStore.setState({ isDrawing: false });
 
-      const tool = activeToolRef.current;
+      const tool: ToolId = xModifierRef.current ? "eraser" : activeToolRef.current;
 
       // Para selection: guardar bounds, mantener visibles las "marching ants"
       // y EXTRAER el contenido (cortar). Luego el usuario puede pegar con Ctrl+V
@@ -885,9 +1014,28 @@ export function usePlaybackEngine() {
   const lastTimeRef = useRef<number>(0);
   const frameAccumRef = useRef<number>(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Refs para evitar re-runs del useEffect cuando project cambia
+  const playingRef = useRef(false);
+  const loopingRef = useRef(true);
+  const fpsRef = useRef(6);
+  const rangeStartRef = useRef(0);
+  const rangeEndRef = useRef(1);
 
   useEffect(() => {
-    if (!project || !playback.playing) {
+    playingRef.current = playback.playing;
+    loopingRef.current = playback.looping;
+    fpsRef.current = playback.playbackFps || 6;
+  }, [playback]);
+
+  useEffect(() => {
+    if (!project) return;
+    const total = totalFrames(project.layers);
+    rangeStartRef.current = playback.rangeStart ?? 0;
+    rangeEndRef.current = playback.rangeEnd ?? Math.max(1, total);
+  }, [project?.layers, playback.rangeStart, playback.rangeEnd]);
+
+  useEffect(() => {
+    if (!playingRef.current) {
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
@@ -899,26 +1047,26 @@ export function usePlaybackEngine() {
       return;
     }
 
-    // Usar playbackFps del store (default 6 FPS)
-    const playbackFps = playback.playbackFps || 6;
-    const total = totalFrames(project.layers);
-    const rangeStart = playback.rangeStart ?? 0;
-    const rangeEnd = playback.rangeEnd ?? Math.max(1, total);
-
     lastTimeRef.current = performance.now();
     frameAccumRef.current = 0;
 
     const loop = (time: number) => {
+      if (!playingRef.current) return;
+
       const dt = time - lastTimeRef.current;
       lastTimeRef.current = time;
-      const framesPerMs = playbackFps / 1000;
+      const framesPerMs = fpsRef.current / 1000;
       frameAccumRef.current += dt * framesPerMs;
 
       while (frameAccumRef.current >= 1) {
         frameAccumRef.current -= 1;
-        const next = project.currentFrame + 1;
+        // Leer el frame actual directamente del store (no del closure)
+        const currentFrame = useStore.getState().project?.currentFrame ?? 0;
+        const next = currentFrame + 1;
+        const rangeEnd = rangeEndRef.current;
+        const rangeStart = rangeStartRef.current;
         if (next >= rangeEnd) {
-          if (playback.looping) {
+          if (loopingRef.current) {
             gotoFrame(rangeStart);
             if (audioRef.current) {
               audioRef.current.currentTime = 0;
@@ -940,7 +1088,7 @@ export function usePlaybackEngine() {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [project, playback, setPlaying, gotoFrame]);
+  }, [playback.playing, setPlaying, gotoFrame]);
 
   // Audio sincronizado
   useEffect(() => {

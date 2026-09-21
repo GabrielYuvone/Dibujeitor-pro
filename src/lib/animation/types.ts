@@ -50,6 +50,7 @@ export type ToolId =
   | "pencil"
   | "brush"
   | "ink"
+  | "watercolor"
   | "eraser"
   | "line"
   | "rectangle"
@@ -75,6 +76,7 @@ export interface BrushSettings {
   cap: StrokeCap;
   join: StrokeJoin;
   eraserMode: "solid" | "soft";
+  fillTolerance: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +127,9 @@ export interface Layer {
   parentId?: ID | null;
   frameLabels?: Record<number, KeyframeType>;
   createdAt: number;
+  // Rango de bucle de la capa. Si está definido, la capa se repite dentro
+  // de este rango al reproducir/exportar (útil para ciclos de caminata, etc.).
+  loopRange?: { start: number; end: number; count: number } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +294,7 @@ export interface PlaybackState {
   playing: boolean;
   looping: boolean;
   speed: number;
+  playbackFps: number;
   rangeStart: number | null;
   rangeEnd: number | null;
 }

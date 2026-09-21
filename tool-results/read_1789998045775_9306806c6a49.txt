@@ -1,0 +1,689 @@
+     1→"use client";
+     2→
+     3→import React, { useEffect, useRef, useCallback } from "react";
+     4→import { useStore, getCurrentLayer } from "@/lib/animation/store";
+     5→import { useDrawingEngine, getCachedImage, preloadImage } from "@/lib/animation/useDrawingEngine";
+     6→import { findCellAtFrame } from "@/lib/animation/utils";
+     7→import { executeActions, evalCondition } from "@/lib/animation/actions";
+     8→import { screenToCanvas } from "@/lib/animation/drawing";
+     9→
+    10→interface CanvasStageProps {
+    11→  width: number;
+    12→  height: number;
+    13→}
+    14→
+    15→/**
+    16→ * Lienzo principal. Renderiza capas con imágenes cacheadas (síncrono)
+    17→ * para evitar parpadeo durante el playback.
+    18→ *
+    19→ * - backgroundRef: fondo del proyecto + grid + safe area
+    20→ * - compositedRef: composición final de TODAS las capas visibles (síncrono)
+    21→ * - drawingCanvasRef: canvas editable donde el usuario dibuja
+    22→ * - overlayCanvasRef: preview de primitivas y selección
+    23→ *
+    24→ * Durante la edición, el drawingCanvas muestra el drawing activo y está
+    25→ * sobre el compositedRef. Durante el playback, ocultamos el drawingCanvas
+    26→ * (que es editable y se resetea) y dejamos solo el compositedRef, que se
+    27→ * actualiza en una sola operación atómica (sin flicker).
+    28→ */
+    29→export function CanvasStage({ width, height }: CanvasStageProps) {
+    30→  const project = useStore((s) => s.project);
+    31→  const canvasView = useStore((s) => s.canvasView);
+    32→  const onion = useStore((s) => s.onion);
+    33→  const showGrid = useStore((s) => s.showGrid);
+    34→  const showSafeArea = useStore((s) => s.showSafeArea);
+    35→  const viewMode = useStore((s) => s.viewMode);
+    36→  const playback = useStore((s) => s.playback);
+    37→  const resetCanvasView = useStore((s) => s.resetCanvasView);
+    38→  const imagePlacement = useStore((s) => s.imagePlacement);
+    39→  const updateImagePlacement = useStore((s) => s.updateImagePlacement);
+    40→  const confirmImagePlacement = useStore((s) => s.confirmImagePlacement);
+    41→  const cancelImagePlacement = useStore((s) => s.cancelImagePlacement);
+    42→
+    43→  const drawingCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    44→  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    45→  const containerRef = useRef<HTMLDivElement | null>(null);
+    46→  const backgroundRef = useRef<HTMLCanvasElement | null>(null);
+    47→  const compositedRef = useRef<HTMLCanvasElement | null>(null);
+    48→  const lastLoadedDrawingRef = useRef<string | null>(null);
+    49→  // Refs para el manejo de drag/scale de la imagen colocada
+    50→  const placementImageRef = useRef<HTMLImageElement | null>(null);
+    51→  const placementModeRef = useRef<"none" | "move" | "scale-tl" | "scale-tr" | "scale-bl" | "scale-br">("none");
+    52→  const placementStartRef = useRef<{ x: number; y: number; px: number; py: number; pw: number; ph: number } | null>(null);
+    53→
+    54→  const engine = useDrawingEngine({
+    55→    drawingCanvasRef,
+    56→    overlayCanvasRef,
+    57→    containerRef,
+    58→  });
+    59→
+    60→  // El modo "composición" se usa cuando NO estamos editando o cuando
+    61→  // se está reproduciendo. En este modo, el drawingCanvas se oculta
+    62→  // (porque se está reseteando entre frames) y solo se ve el composited.
+    63→  // En edit mode, AMBOS canvases están visibles: el composited (con onion
+    64→  // skin + capas no-activas) DEBAJO del drawing canvas (la capa activa).
+    65→  const isCompositing = viewMode === "preview" || playback.playing;
+    66→
+    67→  // ---------------------------------------------------------------------------
+    68→  // Pintar fondo
+    69→  // ---------------------------------------------------------------------------
+    70→
+    71→  const drawBackground = useCallback(() => {
+    72→    const c = backgroundRef.current;
+    73→    if (!c || !project) return;
+    74→    const ctx = c.getContext("2d")!;
+    75→    ctx.clearRect(0, 0, c.width, c.height);
+    76→    ctx.fillStyle = project.settings.bgColor;
+    77→    ctx.fillRect(0, 0, c.width, c.height);
+    78→    if (project.settings.bgColor === "transparent" || project.settings.bgColor === "rgba(0,0,0,0)") {
+    79→      const size = 12;
+    80→      for (let y = 0; y < c.height; y += size) {
+    81→        for (let x = 0; x < c.width; x += size) {
+    82→          const checker = ((x / size + y / size) % 2 === 0);
+    83→          ctx.fillStyle = checker ? "#3a3a3a" : "#2a2a2a";
+    84→          ctx.fillRect(x, y, size, size);
+    85→        }
+    86→      }
+    87→    }
+    88→    if (showSafeArea) {
+    89→      ctx.strokeStyle = "#ff0000";
+    90→      ctx.lineWidth = 1;
+    91→      ctx.setLineDash([4, 4]);
+    92→      const sx = c.width * 0.05;
+    93→      const sy = c.height * 0.05;
+    94→      ctx.strokeRect(sx, sy, c.width - sx * 2, c.height - sy * 2);
+    95→      const tx = c.width * 0.1;
+    96→      const ty = c.height * 0.1;
+    97→      ctx.strokeStyle = "#00ff00";
+    98→      ctx.strokeRect(tx, ty, c.width - tx * 2, c.height - ty * 2);
+    99→      ctx.setLineDash([]);
+   100→    }
+   101→    if (showGrid) {
+   102→      ctx.strokeStyle = "rgba(255,255,255,0.15)";
+   103→      ctx.lineWidth = 1;
+   104→      const step = 50;
+   105→      for (let x = step; x < c.width; x += step) {
+   106→        ctx.beginPath();
+   107→        ctx.moveTo(x, 0);
+   108→        ctx.lineTo(x, c.height);
+   109→        ctx.stroke();
+   110→      }
+   111→      for (let y = step; y < c.height; y += step) {
+   112→        ctx.beginPath();
+   113→        ctx.moveTo(0, y);
+   114→        ctx.lineTo(c.width, y);
+   115→        ctx.stroke();
+   116→      }
+   117→      ctx.strokeStyle = "rgba(255,255,255,0.4)";
+   118→      ctx.beginPath();
+   119→      ctx.moveTo(c.width / 2, 0);
+   120→      ctx.lineTo(c.width / 2, c.height);
+   121→      ctx.moveTo(0, c.height / 2);
+   122→      ctx.lineTo(c.width, c.height / 2);
+   123→      ctx.stroke();
+   124→    }
+   125→  }, [project, showSafeArea, showGrid]);
+   126→
+   127→  // ---------------------------------------------------------------------------
+   128→  // Componer todas las capas en un solo canvas (síncrono con imágenes cacheadas)
+   129→  // ---------------------------------------------------------------------------
+   130→
+   131→  const compositeAll = useCallback(() => {
+   132→    const c = compositedRef.current;
+   133→    if (!c || !project) return;
+   134→    const ctx = c.getContext("2d")!;
+   135→    ctx.clearRect(0, 0, c.width, c.height);
+   136→    ctx.globalAlpha = 1;
+   137→    ctx.globalCompositeOperation = "source-over";
+   138→
+   139→    // En edit mode (sin playback), la capa activa se muestra en el drawing
+   140→    // canvas (arriba). La excluimos del composited para no duplicar.
+   141→    const excludeActiveLayer = viewMode === "edit" && !playback.playing;
+   142→    const activeLayerId = project.currentLayerId;
+   143→
+   144→    // Onion skin primero (debajo de las capas reales) — solo en edit mode
+   145→    if (onion.enabled && excludeActiveLayer) {
+   146→      const currentLayer = getCurrentLayer(project);
+   147→      if (currentLayer && currentLayer.type !== "audio") {
+   148→        drawOnionIntoCanvas(ctx, project, currentLayer, onion);
+   149→      }
+   150→    }
+   151→
+   152→    // Capas (de abajo hacia arriba — la primera capa está en el fondo)
+   153→    for (const layer of project.layers) {
+   154→      if (!layer.visible || layer.type === "audio") continue;
+   155→      // En edit mode, excluir la capa activa del composited
+   156→      if (excludeActiveLayer && layer.id === activeLayerId) continue;
+   157→      const cell = findCellAtFrame(layer.cells, project.currentFrame);
+   158→      if (!cell || !cell.drawingId) continue;
+   159→      const drawing = project.drawings[cell.drawingId];
+   160→      if (!drawing) continue;
+   161→
+   162→      const img = getCachedImage(cell.drawingId);
+   163→      if (img && img.complete && img.naturalWidth > 0) {
+   164→        ctx.globalAlpha = layer.opacity;
+   165→        ctx.drawImage(img, 0, 0, c.width, c.height);
+   166→      }
+   167→    }
+   168→    ctx.globalAlpha = 1;
+   169→
+   170→    // Botones interactivos en modo preview
+   171→    if (viewMode === "preview") {
+   172→      for (const btn of project.buttons) {
+   173→        if (!btn.visible) continue;
+   174→        ctx.fillStyle = btn.color;
+   175→        ctx.fillRect(btn.x, btn.y, btn.width, btn.height);
+   176→        ctx.strokeStyle = "rgba(0,0,0,0.3)";
+   177→        ctx.lineWidth = 1;
+   178→        ctx.strokeRect(btn.x, btn.y, btn.width, btn.height);
+   179→        ctx.fillStyle = "#fff";
+   180→        ctx.font = "14px sans-serif";
+   181→        ctx.textAlign = "center";
+   182→        ctx.textBaseline = "middle";
+   183→        ctx.fillText(btn.label, btn.x + btn.width / 2, btn.y + btn.height / 2);
+   184→      }
+   185→    }
+   186→  }, [project, onion, viewMode, playback.playing]);
+   187→
+   188→  // ---------------------------------------------------------------------------
+   189→  // Dibujar overlay del placement de imagen (modo transformación)
+   190→  // ---------------------------------------------------------------------------
+   191→
+   192→  const drawPlacementOverlay = useCallback(() => {
+   193→    const overlay = overlayCanvasRef.current;
+   194→    if (!overlay || !imagePlacement) return;
+   195→    const octx = overlay.getContext("2d");
+   196→    if (!octx) return;
+   197→
+   198→    // Limpiar el overlay primero
+   199→    octx.clearRect(0, 0, overlay.width, overlay.height);
+   200→
+   201→    const img = placementImageRef.current;
+   202→    if (!img || !img.complete) return;
+   203→
+   204→    const { x, y, width: w, height: h } = imagePlacement;
+   205→    // Dibujar la imagen colocada (semi-transparente para que se vea
+   206→    // que está en modo edición)
+   207→    octx.globalAlpha = 0.95;
+   208→    octx.drawImage(img, x, y, w, h);
+   209→    octx.globalAlpha = 1;
+   210→
+   211→    // Bounding box
+   212→    octx.strokeStyle = "#4dabf7";
+   213→    octx.lineWidth = 1.5;
+   214→    octx.setLineDash([6, 4]);
+   215→    octx.strokeRect(x, y, w, h);
+   216→    octx.setLineDash([]);
+   217→
+   218→    // 4 corner handles (cuadrados azules)
+   219→    const handleSize = 10;
+   220→    const handles = [
+   221→      { x: x - handleSize / 2, y: y - handleSize / 2 },          // top-left
+   222→      { x: x + w - handleSize / 2, y: y - handleSize / 2 },       // top-right
+   223→      { x: x - handleSize / 2, y: y + h - handleSize / 2 },       // bottom-left
+   224→      { x: x + w - handleSize / 2, y: y + h - handleSize / 2 },   // bottom-right
+   225→    ];
+   226→    for (const hd of handles) {
+   227→      octx.fillStyle = "#4dabf7";
+   228→      octx.fillRect(hd.x, hd.y, handleSize, handleSize);
+   229→      octx.strokeStyle = "#fff";
+   230→      octx.lineWidth = 1;
+   231→      octx.strokeRect(hd.x, hd.y, handleSize, handleSize);
+   232→    }
+   233→
+   234→    // Texto de ayuda
+   235→    octx.fillStyle = "rgba(77, 171, 247, 0.95)";
+   236→    octx.font = "11px sans-serif";
+   237→    octx.textAlign = "left";
+   238→    octx.textBaseline = "top";
+   239→    octx.fillText("Enter para confirmar · Esc para cancelar · arrastrá para mover, puntas para escalar", x, y - 16);
+   240→  }, [imagePlacement]);
+   241→
+   242→  // Cargar la imagen del placement cuando cambia
+   243→  useEffect(() => {
+   244→    if (!imagePlacement) {
+   245→      placementImageRef.current = null;
+   246→      // Limpiar overlay
+   247→      const overlay = overlayCanvasRef.current;
+   248→      if (overlay) {
+   249→        const octx = overlay.getContext("2d");
+   250→        octx?.clearRect(0, 0, overlay.width, overlay.height);
+   251→      }
+   252→      return;
+   253→    }
+   254→    // Pre-cargar la imagen
+   255→    const img = new Image();
+   256→    img.onload = () => {
+   257→      placementImageRef.current = img;
+   258→      drawPlacementOverlay();
+   259→    };
+   260→    img.src = imagePlacement.dataUrl;
+   261→  }, [imagePlacement, drawPlacementOverlay]);
+   262→
+   263→  // Redibujar el overlay cuando cambia el placement (drag/scale)
+   264→  useEffect(() => {
+   265→    drawPlacementOverlay();
+   266→  }, [drawPlacementOverlay]);
+   267→
+   268→  // ---------------------------------------------------------------------------
+   269→  // Handlers para drag/scale de la imagen colocada
+   270→  // ---------------------------------------------------------------------------
+   271→
+   272→  const getCanvasPointSimple = useCallback(
+   273→    (clientX: number, clientY: number): { x: number; y: number } | null => {
+   274→      const container = containerRef.current;
+   275→      const proj = project;
+   276→      if (!container || !proj) return null;
+   277→      const rect = container.getBoundingClientRect();
+   278→      return screenToCanvas(clientX, clientY, rect, canvasView, proj.settings.width, proj.settings.height);
+   279→    },
+   280→    [containerRef, project, canvasView]
+   281→  );
+   282→
+   283→  const handlePlacementPointerDown = useCallback(
+   284→    (e: React.PointerEvent): boolean => {
+   285→      if (!imagePlacement) return false;
+   286→      const pt = getCanvasPointSimple(e.clientX, e.clientY);
+   287→      if (!pt) return false;
+   288→      const { x, y, width: w, height: h } = imagePlacement;
+   289→      const handleSize = 14; // área de click para los handles (más grande que el visual)
+   290→      // Verificar si el click está en algún corner handle
+   291→      const inTL = pt.x >= x - handleSize / 2 && pt.x <= x + handleSize / 2 &&
+   292→                   pt.y >= y - handleSize / 2 && pt.y <= y + handleSize / 2;
+   293→      const inTR = pt.x >= x + w - handleSize / 2 && pt.x <= x + w + handleSize / 2 &&
+   294→                   pt.y >= y - handleSize / 2 && pt.y <= y + handleSize / 2;
+   295→      const inBL = pt.x >= x - handleSize / 2 && pt.x <= x + handleSize / 2 &&
+   296→                   pt.y >= y + h - handleSize / 2 && pt.y <= y + h + handleSize / 2;
+   297→      const inBR = pt.x >= x + w - handleSize / 2 && pt.x <= x + w + handleSize / 2 &&
+   298→                   pt.y >= y + h - handleSize / 2 && pt.y <= y + h + handleSize / 2;
+   299→      const inImage = pt.x >= x && pt.x <= x + w && pt.y >= y && pt.y <= y + h;
+   300→
+   301→      let mode: typeof placementModeRef.current = "none";
+   302→      if (inTL) mode = "scale-tl";
+   303→      else if (inTR) mode = "scale-tr";
+   304→      else if (inBL) mode = "scale-bl";
+   305→      else if (inBR) mode = "scale-br";
+   306→      else if (inImage) mode = "move";
+   307→
+   308→      if (mode === "none") return false;
+   309→
+   310→      placementModeRef.current = mode;
+   311→      placementStartRef.current = {
+   312→        x: pt.x,
+   313→        y: pt.y,
+   314→        px: imagePlacement.x,
+   315→        py: imagePlacement.y,
+   316→        pw: imagePlacement.width,
+   317→        ph: imagePlacement.height,
+   318→      };
+   319→      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+   320→      return true;
+   321→    },
+   322→    [imagePlacement, getCanvasPointSimple]
+   323→  );
+   324→
+   325→  const handlePlacementPointerMove = useCallback(
+   326→    (e: React.PointerEvent): boolean => {
+   327→      if (placementModeRef.current === "none" || !imagePlacement || !placementStartRef.current) {
+   328→        return false;
+   329→      }
+   330→      const pt = getCanvasPointSimple(e.clientX, e.clientY);
+   331→      if (!pt) return true;
+   332→      const start = placementStartRef.current;
+   333→      const dx = pt.x - start.x;
+   334→      const dy = pt.y - start.y;
+   335→      const aspect = imagePlacement.nativeW / imagePlacement.nativeH;
+   336→
+   337→      if (placementModeRef.current === "move") {
+   338→        updateImagePlacement({
+   339→          x: start.px + dx,
+   340→          y: start.py + dy,
+   341→        });
+   342→      } else {
+   343→        // Escalar desde el centro (más simple y predecible).
+   344→        // El usuario arrastra un corner; la imagen crece o se achica
+   345→        // manteniendo el centro fijo y preservando aspect ratio.
+   346→        const cx = start.px + start.pw / 2;
+   347→        const cy = start.py + start.ph / 2;
+   348→        const newDx = pt.x - cx;
+   349→        const newDy = pt.y - cy;
+   350→        const newDist = Math.sqrt(newDx * newDx + newDy * newDy);
+   351→        // Distancia original desde el centro a un corner
+   352→        const cornerDistX = start.pw / 2;
+   353→        const cornerDistY = start.ph / 2;
+   354→        const cornerDist = Math.sqrt(cornerDistX * cornerDistX + cornerDistY * cornerDistY);
+   355→        const scale = newDist / Math.max(1, cornerDist);
+   356→        // Calcular nuevo tamaño preservando aspect ratio
+   357→        let newW = Math.max(20, Math.round(start.pw * scale));
+   358→        let newH = Math.max(20, Math.round(newW / aspect));
+   359→        // Recalcular newW para mantener aspect exacto
+   360→        newW = Math.round(newH * aspect);
+   361→        // Centro fijo
+   362→        const newX = Math.round(cx - newW / 2);
+   363→        const newY = Math.round(cy - newH / 2);
+   364→        updateImagePlacement({
+   365→          x: newX,
+   366→          y: newY,
+   367→          width: newW,
+   368→          height: newH,
+   369→        });
+   370→      }
+   371→      return true;
+   372→    },
+   373→    [imagePlacement, getCanvasPointSimple, updateImagePlacement]
+   374→  );
+   375→
+   376→  const handlePlacementPointerUp = useCallback(
+   377→    (e: React.PointerEvent): boolean => {
+   378→      if (placementModeRef.current === "none") return false;
+   379→      placementModeRef.current = "none";
+   380→      placementStartRef.current = null;
+   381→      return true;
+   382→    },
+   383→    []
+   384→  );
+   385→
+   386→  // Enter = confirmar, Escape = cancelar
+   387→  useEffect(() => {
+   388→    if (!imagePlacement) return;
+   389→    const onKey = (e: KeyboardEvent) => {
+   390→      if (e.key === "Enter") {
+   391→        e.preventDefault();
+   392→        confirmImagePlacement();
+   393→      } else if (e.key === "Escape") {
+   394→        e.preventDefault();
+   395→        cancelImagePlacement();
+   396→      }
+   397→    };
+   398→    window.addEventListener("keydown", onKey);
+   399→    return () => window.removeEventListener("keydown", onKey);
+   400→  }, [imagePlacement, confirmImagePlacement, cancelImagePlacement]);
+   401→
+   402→  // ---------------------------------------------------------------------------
+   403→  // Efecto: ajustar tamaños de canvas
+   404→  // ---------------------------------------------------------------------------
+   405→
+   406→  useEffect(() => {
+   407→    for (const ref of [drawingCanvasRef, overlayCanvasRef, backgroundRef, compositedRef]) {
+   408→      const c = ref.current;
+   409→      if (c && (c.width !== width || c.height !== height)) {
+   410→        c.width = width;
+   411→        c.height = height;
+   412→      }
+   413→    }
+   414→    drawBackground();
+   415→  }, [width, height, drawBackground]);
+   416→
+   417→  useEffect(() => {
+   418→    drawBackground();
+   419→  }, [drawBackground]);
+   420→
+   421→  // ---------------------------------------------------------------------------
+   422→  // Efecto: pre-cachear todas las imágenes del proyecto
+   423→  // ---------------------------------------------------------------------------
+   424→
+   425→  useEffect(() => {
+   426→    if (!project) return;
+   427→    const all = Object.values(project.drawings);
+   428→    for (const d of all) {
+   429→      preloadImage(d.id, d.dataUrl);
+   430→    }
+   431→  }, [project?.drawings]);
+   432→
+   433→  // ---------------------------------------------------------------------------
+   434→  // Efecto: cargar drawing activo + componer (en edit mode)
+   435→  // ---------------------------------------------------------------------------
+   436→
+   437→  useEffect(() => {
+   438→    if (!project) return;
+   439→    // Componer siempre
+   440→    compositeAll();
+   441→
+   442→    // En edición, también cargar el drawing activo
+   443→    if (viewMode !== "edit" || playback.playing) return;
+   444→    const layer = getCurrentLayer(project);
+   445→    if (!layer || layer.type === "audio") return;
+   446→    const cell = findCellAtFrame(layer.cells, project.currentFrame);
+   447→    const drawingId = cell?.drawingId ?? null;
+   448→    // IMPORTANTE: recargar también si cambió el dataUrl del drawing (por undo/redo),
+   449→    // no solo si cambió el drawingId. Usamos updatedAt como cache key confiable:
+   450→    // cambia con cada commit, undo y redo.
+   451→    const drawing = drawingId ? project.drawings[drawingId] : null;
+   452→    const updatedAt = drawing?.updatedAt ?? 0;
+   453→    const cacheKey = `${drawingId}:${updatedAt}`;
+   454→    if (cacheKey !== lastLoadedDrawingRef.current) {
+   455→      lastLoadedDrawingRef.current = cacheKey;
+   456→      engine.loadDrawingIntoCanvas(drawingId);
+   457→    }
+   458→  }, [
+   459→    project?.currentFrame,
+   460→    project?.currentLayerId,
+   461→    project?.drawings,
+   462→    project?.layers,
+   463→    viewMode,
+   464→    playback.playing,
+   465→    onion,
+   466→    compositeAll,
+   467→    engine,
+   468→  ]);
+   469→
+   470→  // Recomponer al cambiar el proyecto (cualquier cambio)
+   471→  useEffect(() => {
+   472→    compositeAll();
+   473→  }, [compositeAll]);
+   474→
+   475→  // ---------------------------------------------------------------------------
+   476→  // Transform del contenedor
+   477→  // ---------------------------------------------------------------------------
+   478→
+   479→  const transform = `translate(-50%, -50%) translate(${canvasView.panX}px, ${canvasView.panY}px) scale(${canvasView.zoom}) rotate(${canvasView.rotation}deg)`;
+   480→
+   481→  if (!project) return null;
+   482→
+   483→  return (
+   484→    <div
+   485→      ref={containerRef}
+   486→      className="relative w-full h-full overflow-hidden bg-neutral-950"
+   487→      style={{
+   488→        cursor:
+   489→          useStore.getState().currentTool === "pan"
+   490→            ? "grab"
+   491→            : useStore.getState().currentTool === "eyedropper"
+   492→              ? "copy"
+   493→              : useStore.getState().currentTool === "selection" || useStore.getState().currentTool === "transform"
+   494→                ? "default"
+   495→                : "crosshair",
+   496→      }}
+   497→      onWheel={(e) => engine.handleWheel(e as unknown as WheelEvent)}
+   498→    >
+   499→      <div
+   500→        className="absolute"
+   501→        style={{
+   502→          left: "50%",
+   503→          top: "50%",
+   504→          transform,
+   505→          transformOrigin: "center center",
+   506→          width,
+   507→          height,
+   508→          boxShadow: "0 0 0 1px rgba(255,255,255,0.2), 0 10px 30px rgba(0,0,0,0.5)",
+   509→          cursor: imagePlacement ? "move" : undefined,
+   510→        }}
+   511→        onPointerDown={(e) => {
+   512→          // Si hay un placement activo, interceptar el evento
+   513→          if (imagePlacement && handlePlacementPointerDown(e)) {
+   514→            e.stopPropagation();
+   515→            return;
+   516→          }
+   517→          engine.handlePointerDown(e);
+   518→        }}
+   519→        onPointerMove={(e) => {
+   520→          if (imagePlacement && handlePlacementPointerMove(e)) {
+   521→            e.stopPropagation();
+   522→            return;
+   523→          }
+   524→        }}
+   525→        onPointerUp={(e) => {
+   526→          if (imagePlacement && handlePlacementPointerUp(e)) {
+   527→            e.stopPropagation();
+   528→            return;
+   529→          }
+   530→        }}
+   531→      >
+   532→        <canvas
+   533→          ref={backgroundRef}
+   534→          width={width}
+   535→          height={height}
+   536→          className="absolute inset-0 pointer-events-none"
+   537→          style={{ width, height }}
+   538→        />
+   539→        {/* Composited (onion skin + capas no-activas en edit; todo en preview) */}
+   540→        {/* SIEMPRE visible: en edit mode queda DEBAJO del drawing canvas */}
+   541→        <canvas
+   542→          ref={compositedRef}
+   543→          width={width}
+   544→          height={height}
+   545→          className="absolute inset-0 pointer-events-none"
+   546→          style={{ width, height }}
+   547→        />
+   548→        {/* Drawing canvas (editable, solo en edit mode sin playback) */}
+   549→        <canvas
+   550→          ref={drawingCanvasRef}
+   551→          width={width}
+   552→          height={height}
+   553→          className="absolute inset-0 canvas-surface"
+   554→          style={{ width, height, visibility: isCompositing ? "hidden" : "visible" }}
+   555→        />
+   556→        {/* Overlay (selección, primitivas preview) */}
+   557→        <canvas
+   558→          ref={overlayCanvasRef}
+   559→          width={width}
+   560→          height={height}
+   561→          className="absolute inset-0 pointer-events-none"
+   562→          style={{ width, height }}
+   563→        />
+   564→      </div>
+   565→
+   566→      {/* Indicadores */}
+   567→      <div className="absolute bottom-2 left-2 flex items-center gap-2 bg-background/80 px-2 py-1 rounded text-xs backdrop-blur">
+   568→        <span>{Math.round(canvasView.zoom * 100)}%</span>
+   569→        <span className="text-muted-foreground">|</span>
+   570→        <span>{width}×{height}</span>
+   571→        <button
+   572→          className="ml-2 px-2 py-0.5 rounded bg-muted hover:bg-muted-foreground/20"
+   573→          onClick={resetCanvasView}
+   574→        >
+   575→          Reiniciar
+   576→        </button>
+   577→      </div>
+   578→    </div>
+   579→  );
+   580→}
+   581→
+   582→// ---------------------------------------------------------------------------
+   583→// Botón interactivo (modo preview — sobre el composited)
+   584→// ---------------------------------------------------------------------------
+   585→
+   586→function InteractiveButtonView({ buttonId }: { buttonId: string }) {
+   587→  const button = useStore((s) =>
+   588→    s.project?.buttons.find((b) => b.id === buttonId)
+   589→  );
+   590→  const project = useStore((s) => s.project);
+   591→
+   592→  if (!button || !project) return null;
+   593→
+   594→  const handleClick = () => {
+   595→    const handlers = button.handlers.filter((h) => h.event === "click");
+   596→    handlers.forEach((h) => {
+   597→      const ctx = {
+   598→        project,
+   599→        setProjectState: () => {},
+   600→        gotoFrame: (frame: number) => useStore.getState().gotoFrame(frame),
+   601→        togglePlay: () => useStore.getState().togglePlay(),
+   602→        setPlaying: (p: boolean) => useStore.getState().setPlaying(p),
+   603→        gotoScene: () => {},
+   604→        setButtonVisible: (id: string, vis: boolean) =>
+   605→          useStore.getState().updateButton(id, { visible: vis }),
+   606→        playSound: (id: string) => {
+   607→          const clip = project.audioClips[id];
+   608→          if (clip) {
+   609→            const a = new Audio(clip.dataUrl);
+   610→            a.volume = clip.volume;
+   611→            a.play().catch(() => {});
+   612→          }
+   613→        },
+   614→        setVariable: (name: string, value: any) =>
+   615→          useStore.getState().setVariable(name, value),
+   616→        stop: () => {},
+   617→      };
+   618→      if (!evalCondition(h.condition, project.variables)) return;
+   619→      executeActions(h.actions, ctx);
+   620→    });
+   621→  };
+   622→
+   623→  return (
+   624→    <button
+   625→      className="absolute rounded-md text-white font-medium shadow-lg border border-black/20 hover:brightness-110 active:scale-95 transition-transform z-40"
+   626→      style={{
+   627→        left: button.x,
+   628→        top: button.y,
+   629→        width: button.width,
+   630→        height: button.height,
+   631→        backgroundColor: button.color,
+   632→        pointerEvents: "auto",
+   633→      }}
+   634→      onClick={handleClick}
+   635→    >
+   636→      {button.label}
+   637→    </button>
+   638→  );
+   639→}
+   640→
+   641→// ---------------------------------------------------------------------------
+   642→// Dibujar onion skin en un contexto (síncrono con imágenes cacheadas)
+   643→// ---------------------------------------------------------------------------
+   644→
+   645→function drawOnionIntoCanvas(
+   646→  ctx: CanvasRenderingContext2D,
+   647→  project: NonNullable<ReturnType<typeof useStore.getState>["project"]>,
+   648→  currentLayer: ReturnType<typeof getCurrentLayer>,
+   649→  onion: ReturnType<typeof useStore.getState>["onion"]
+   650→) {
+   651→  if (!currentLayer || !onion) return;
+   652→  const drawOne = (frame: number, opacity: number, color: string) => {
+   653→    const cell = findCellAtFrame(currentLayer.cells, frame);
+   654→    if (!cell || !cell.drawingId) return;
+   655→    const img = getCachedImage(cell.drawingId);
+   656→    if (!img || !img.complete) return;
+   657→    ctx.save();
+   658→    ctx.globalAlpha = opacity;
+   659→    ctx.globalCompositeOperation = "source-over";
+   660→    ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+   661→    // Tinte
+   662→    ctx.globalCompositeOperation = "source-in";
+   663→    ctx.fillStyle = color;
+   664→    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+   665→    ctx.restore();
+   666→  };
+   667→
+   668→  if (!onion.onlyPrevious) {
+   669→    for (let i = 1; i <= onion.prevFrames; i++) {
+   670→      const frame = project.currentFrame - i;
+   671→      if (frame < 0) break;
+   672→      const op = onion.prevOpacity * (1 - (i - 1) / onion.prevFrames);
+   673→      drawOne(frame, op, onion.prevColor);
+   674→    }
+   675→  } else {
+   676→    const frame = project.currentFrame - 1;
+   677→    if (frame >= 0) drawOne(frame, onion.prevOpacity, onion.prevColor);
+   678→  }
+   679→
+   680→  if (!onion.onlyPrevious) {
+   681→    for (let i = 1; i <= onion.nextFrames; i++) {
+   682→      const frame = project.currentFrame + i;
+   683→      const op = onion.nextOpacity * (1 - (i - 1) / onion.nextFrames);
+   684→      drawOne(frame, op, onion.nextColor);
+   685→    }
+   686→  }
+   687→}
+
+[showing lines 1-687 of 688; use offset=688 with limit to continue reading]
