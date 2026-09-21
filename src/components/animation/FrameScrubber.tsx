@@ -9,8 +9,6 @@ import {
   ChevronRight,
   SkipBack,
   SkipForward,
-  Play,
-  Pause,
 } from "lucide-react";
 
 /**
@@ -20,11 +18,9 @@ import {
  */
 export function FrameScrubber() {
   const project = useStore((s) => s.project);
-  const playback = useStore((s) => s.playback);
   const gotoFrame = useStore((s) => s.gotoFrame);
   const nextFrame = useStore((s) => s.nextFrame);
   const prevFrame = useStore((s) => s.prevFrame);
-  const togglePlay = useStore((s) => s.togglePlay);
 
   const total = useMemo(() => {
     if (!project) return 1;
@@ -77,15 +73,6 @@ export function FrameScrubber() {
           title="Anterior (←)"
         >
           <ChevronLeft size={14} />
-        </Button>
-        <Button
-          size="sm"
-          variant="default"
-          className="h-7 w-7 p-0"
-          onClick={togglePlay}
-          title="Reproducir/Pausar (Espacio)"
-        >
-          {playback.playing ? <Pause size={12} /> : <Play size={12} />}
         </Button>
         <Button
           size="sm"

@@ -256,10 +256,12 @@ export function drawInkDab(
 /**
  * Dibuja un segmento de trazo con acuarela.
  *
- * La acuarela simula pintura acuosa: cada segmento agrega varios dabs
- * translúcidos que se acumulan. Hay variación en opacidad y tamaño para
- * simular el flujo irregular del agua. El color se oscurece levemente
- * donde se acumula (efecto "wet edge").
+ * La acuarela NO es circular. Simula una brocha real con cerdas:
+ * - Dibuja múltiples líneas paralelas (cerdas) con separación irregular
+ * - Cada cerda tiene opacidad variable (efecto de carga desigual)
+ * - Los bordes son irregulares y deshilachados (no redondos)
+ * - Acumulación gradual con 'multiply' para mezcla de color
+ * - Efecto de "poca pintura" al final: cerdas se rompen y aclaran
  */
 export function drawWatercolorSegment(
   ctx: CanvasRenderingContext2D,
@@ -272,50 +274,77 @@ export function drawWatercolorSegment(
   baseAlpha: number,
   pressure = 1
 ) {
-  // La acuarela tiene flujo variable y dabs múltiples translúcidos
-  const flow = 0.4 + Math.random() * 0.4;
-  const size = baseSize * (0.8 + Math.random() * 0.5) * pressure;
-  const alpha = baseAlpha * flow * 0.35; // Muy translúcido para acumular
+  const size = baseSize * pressure;
+  const alpha = baseAlpha * 0.3; // Translúcido para acumulación
 
   ctx.strokeStyle = baseColor;
   ctx.fillStyle = baseColor;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.globalCompositeOperation = "source-over";
+  ctx.lineCap = "butt"; // No redondo: las cerdas son rectas
+  ctx.lineJoin = "miter";
+  ctx.globalCompositeOperation = "multiply"; // Mezcla como acuarela
 
-  // Trazo principal suave
-  ctx.globalAlpha = alpha;
-  ctx.lineWidth = Math.max(0.5, size);
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.stroke();
-
-  // Dabs adicionales translúcidos alrededor del segmento
+  // Calcular ángulo y perpendicular del trazo
   const dx = x2 - x1;
   const dy = y2 - y1;
-  const dist = Math.sqrt(dx * dx + dy * dy);
-  const steps = Math.max(1, Math.floor(dist / (size * 0.3)));
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    const cx = x1 + dx * t;
-    const cy = y1 + dy * t;
-    // Variación radial
-    const angle = Math.random() * Math.PI * 2;
-    const r = Math.random() * size * 0.4;
-    const px = cx + Math.cos(angle) * r;
-    const py = cy + Math.sin(angle) * r;
-    const dabSize = size * (0.3 + Math.random() * 0.4);
-    ctx.globalAlpha = alpha * (0.5 + Math.random() * 0.5);
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 0.1) return;
+  const nx = -dy / len; // Normal perpendicular
+  const ny = dx / len;
+
+  // Número de cerdas proporcional al tamaño
+  const bristleCount = Math.max(5, Math.floor(size * 0.6));
+  const halfWidth = size / 2;
+
+  // Dibujar cada cerda como una línea paralela con variación
+  for (let i = 0; i < bristleCount; i++) {
+    // Posición de la cerda en el ancho del pincel (distribución irregular)
+    const t = (i / (bristleCount - 1)) - 0.5; // -0.5 a 0.5
+    // Offset perpendicular con jitter irregular
+    const jitter = (Math.random() - 0.5) * (size * 0.08);
+    const offset = t * size + jitter;
+    const bx1 = x1 + nx * offset;
+    const by1 = y1 + ny * offset;
+    const bx2 = x2 + nx * offset;
+    const by2 = y2 + ny * offset;
+
+    // Opacidad variable por cerda (carga desigual)
+    // Cerda central más oscura, bordes más claros (efecto de pincel)
+    const distFromCenter = Math.abs(t);
+    const bristleAlpha = alpha * (1 - distFromCenter * 0.5) * (0.5 + Math.random() * 0.5);
+
+    // Algunas cerdas se rompen al final (poca pintura)
+    const breakPoint = 0.7 + Math.random() * 0.3;
+    const endX = bx1 + (bx2 - bx1) * breakPoint;
+    const endY = by1 + (by2 - by1) * breakPoint;
+
+    ctx.globalAlpha = bristleAlpha;
+    ctx.lineWidth = Math.max(0.3, size * 0.04 + Math.random() * size * 0.06);
     ctx.beginPath();
-    ctx.arc(px, py, Math.max(0.3, dabSize / 2), 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(bx1, by1);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+
+    // A veces agregar un punto de "salpicadura" en el extremo
+    if (Math.random() < 0.15 && breakPoint < 0.85) {
+      ctx.globalAlpha = bristleAlpha * 0.5;
+      ctx.beginPath();
+      ctx.arc(endX + (Math.random() - 0.5) * size * 0.2,
+              endY + (Math.random() - 0.5) * size * 0.2,
+              Math.max(0.3, size * 0.03), 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
+
+  // Reset
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
 }
 
 /**
- * Dibuja un punto inicial de acuarela. Crea un parche suave
- * translúcido sobre el que se acumularán los segmentos siguientes.
+ * Dibuja un punto inicial de acuarela. Crea un parche de cerdas
+ * irregulares translúcidas.
  */
 export function drawWatercolorDab(
   ctx: CanvasRenderingContext2D,
@@ -326,27 +355,36 @@ export function drawWatercolorDab(
   baseAlpha: number,
   pressure = 1
 ) {
-  const flow = 0.5 + Math.random() * 0.3;
-  const size = baseSize * (0.8 + Math.random() * 0.4) * pressure;
-  const alpha = baseAlpha * flow * 0.4;
+  const size = baseSize * pressure;
+  const alpha = baseAlpha * 0.3;
 
   ctx.fillStyle = baseColor;
-  ctx.globalAlpha = alpha;
-  ctx.globalCompositeOperation = "source-over";
+  ctx.globalCompositeOperation = "multiply";
 
-  // Varios dabs translúcidos para crear el efecto acuoso
-  const count = Math.max(3, Math.floor(size * 0.5));
-  for (let i = 0; i < count; i++) {
-    const angle = Math.random() * Math.PI * 2;
+  // Dibujar cerdas iniciales en múltiples direcciones
+  const bristleCount = Math.max(5, Math.floor(size * 0.6));
+  for (let i = 0; i < bristleCount; i++) {
+    const angle = (i / bristleCount) * Math.PI * 2 + Math.random() * 0.3;
     const r = Math.random() * size * 0.5;
     const px = x + Math.cos(angle) * r;
     const py = y + Math.sin(angle) * r;
-    const s = size * (0.3 + Math.random() * 0.4);
-    ctx.globalAlpha = alpha * (0.4 + Math.random() * 0.6);
+    const bristleAlpha = alpha * (0.4 + Math.random() * 0.6);
+    const bristleSize = Math.max(0.3, size * 0.04 + Math.random() * size * 0.06);
+
+    ctx.globalAlpha = bristleAlpha;
+    // Pequeña línea en dirección del ángulo
+    const len = size * 0.15 * Math.random();
+    ctx.lineWidth = bristleSize;
+    ctx.lineCap = "butt";
     ctx.beginPath();
-    ctx.arc(px, py, Math.max(0.3, s / 2), 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + Math.cos(angle) * len, py + Math.sin(angle) * len);
+    ctx.stroke();
   }
+
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
+  ctx.lineCap = "round";
 }
 
 // ---------------------------------------------------------------------------

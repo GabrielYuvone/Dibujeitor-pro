@@ -819,22 +819,9 @@ export function useDrawingEngine({
           const h = Math.abs(lastPosRef.current.y - startPosRef.current.y);
           if (w > 2 && h > 2) {
             selectionBoundsRef.current = { x, y, width: w, height: h };
-            // Extraer pixels seleccionados (cortar)
-            const canvas = drawingCanvasRef.current;
-            if (canvas) {
-              const ctx = canvas.getContext("2d");
-              if (ctx) {
-                try {
-                  selectionImageRef.current = ctx.getImageData(x, y, w, h);
-                  // Limpiar la región seleccionada
-                  ctx.clearRect(x, y, w, h);
-                  await commitDrawing();
-                } catch (err) {
-                  console.error(err);
-                }
-              }
-            }
-            // Dibujar "marching ants" en overlay (animación)
+            // NO cortar automáticamente. Solo seleccionar.
+            // El usuario puede hacer Ctrl+C (copiar) o Ctrl+X (cortar) después.
+            // Dibujar "marching ants" en overlay
             if (overlay) {
               const octx = overlay.getContext("2d");
               if (octx) {
@@ -844,12 +831,11 @@ export function useDrawingEngine({
                 octx.setLineDash([6, 4]);
                 octx.strokeRect(x, y, w, h);
                 octx.setLineDash([]);
-                // Indicador de "contenido cortado" — texto pequeño
                 octx.fillStyle = "rgba(77, 171, 247, 0.9)";
                 octx.font = "11px sans-serif";
                 octx.textAlign = "left";
                 octx.textBaseline = "top";
-                octx.fillText("✂ Ctrl+V para pegar", x + 4, y - 14);
+                octx.fillText("Ctrl+C copiar · Ctrl+X cortar · Ctrl+V pegar", x + 4, y - 14);
               }
             }
           } else {
@@ -932,18 +918,98 @@ export function useDrawingEngine({
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
+    const onKey = async (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
         return;
       }
-      // Ctrl/Cmd + V = pegar selección
-      if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+      // Ctrl/Cmd + C = copiar selección (sin borrar)
+      if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
+        if (selectionBoundsRef.current && selectionImageRef.current) return;
         e.preventDefault();
-        pasteSelection();
+        const canvas = drawingCanvasRef.current;
+        const bounds = selectionBoundsRef.current;
+        if (canvas && bounds) {
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            try {
+              selectionImageRef.current = ctx.getImageData(bounds.x, bounds.y, bounds.width, bounds.height);
+            } catch (_) {}
+          }
+        }
         return;
       }
-      // Delete o Backspace = limpiar selección (si hay)
+      // Ctrl/Cmd + X = cortar selección (copiar + borrar)
+      if ((e.ctrlKey || e.metaKey) && (e.key === "x" || e.key === "X")) {
+        // No confundir con el modificador X para goma
+        if (selectionBoundsRef.current) {
+          e.preventDefault();
+          const canvas = drawingCanvasRef.current;
+          const bounds = selectionBoundsRef.current;
+          if (canvas && bounds) {
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              try {
+                selectionImageRef.current = ctx.getImageData(bounds.x, bounds.y, bounds.width, bounds.height);
+                ctx.clearRect(bounds.x, bounds.y, bounds.width, bounds.height);
+                await commitDrawing();
+              } catch (_) {}
+            }
+          }
+          return;
+        }
+      }
+      // Ctrl/Cmd + V = pegar selección (en el lugar original)
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "v" || e.key === "V")) {
+        if (selectionImageRef.current && selectionBoundsRef.current) {
+          e.preventDefault();
+          const canvas = drawingCanvasRef.current;
+          const sel = selectionImageRef.current;
+          const bounds = selectionBoundsRef.current;
+          if (canvas && sel && bounds) {
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.putImageData(sel, bounds.x, bounds.y);
+              await commitDrawing();
+              const overlay = overlayCanvasRef.current;
+              if (overlay) {
+                const octx = overlay.getContext("2d");
+                octx?.clearRect(0, 0, overlay.width, overlay.height);
+              }
+              selectionBoundsRef.current = null;
+              selectionImageRef.current = null;
+            }
+          }
+          return;
+        }
+      }
+      // Shift + Ctrl/Cmd + V = pegar en la posición del cursor (no implementado aún,
+      // pero prevenimos el default)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        // Por ahora hace lo mismo que Ctrl+V normal
+        if (selectionImageRef.current && selectionBoundsRef.current) {
+          const canvas = drawingCanvasRef.current;
+          const sel = selectionImageRef.current;
+          const bounds = selectionBoundsRef.current;
+          if (canvas && sel && bounds) {
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.putImageData(sel, bounds.x, bounds.y);
+              await commitDrawing();
+              const overlay = overlayCanvasRef.current;
+              if (overlay) {
+                const octx = overlay.getContext("2d");
+                octx?.clearRect(0, 0, overlay.width, overlay.height);
+              }
+              selectionBoundsRef.current = null;
+              selectionImageRef.current = null;
+            }
+          }
+        }
+        return;
+      }
+      // Delete o Backspace = limpiar selección
       if (e.key === "Delete" || e.key === "Backspace") {
         if (selectionBoundsRef.current) {
           e.preventDefault();
@@ -959,7 +1025,7 @@ export function useDrawingEngine({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [pasteSelection, clearSelection]);
+  }, [pasteSelection, clearSelection, commitDrawing]);
 
   // ---------------------------------------------------------------------------
   // Window listeners para move/up (bulletproof — no dependen de React)

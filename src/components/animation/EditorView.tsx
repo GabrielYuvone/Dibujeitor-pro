@@ -397,18 +397,8 @@ export function EditorView() {
             )}
           </div>
 
-          {/* Botones flotantes */}
-          <div className="absolute bottom-4 right-4 flex flex-col gap-2">
-            <Button
-              size="icon"
-              variant="default"
-              className="rounded-full h-12 w-12 shadow-lg"
-              onClick={togglePlay}
-              title="Reproducir/Pausar (Espacio)"
-            >
-              {playback.playing ? <Pause size={18} /> : <Play size={18} />}
-            </Button>
-          </div>
+          {/* Botones flotantes - REMOVIDO el play duplicado, ya está en Timeline */}
+
         </>
       )}
 
@@ -434,7 +424,7 @@ function TabButton({
     <button
       className={`flex-1 px-2 py-1.5 text-xs font-medium border-b-2 transition-colors flex items-center justify-center ${
         active
-          ? "border-primary text-primary bg-background"
+          ? "border-transparent text-primary bg-muted/40"
           : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30"
       }`}
       onClick={onClick}
