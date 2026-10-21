@@ -114,8 +114,9 @@ export function useDrawingEngine({
   const isPanningRef = useRef(false);
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   // Zoom por arrastre (modificador Z)
+  // Guardamos la posición del click (clientX/Y) para anclar el zoom en ese punto.
   const isZoomingRef = useRef(false);
-  const zoomStartRef = useRef<{ y: number; zoom: number } | null>(null);
+  const zoomStartRef = useRef<{ y: number; zoom: number; clientX: number; clientY: number } | null>(null);
   // Modificador Z: mientras se mantiene Z apretado, el wheel y el drag
   // hacen zoom (arrastra hacia arriba = acerca, hacia abajo = aleja).
   const zModifierRef = useRef(false);
@@ -327,6 +328,32 @@ export function useDrawingEngine({
   }, [drawingCanvasRef, updateDrawing]);
 
   // ---------------------------------------------------------------------------
+  // Helper: aplicar zoom anclado en un punto de pantalla (clientX/Y).
+  // El punto del canvas bajo ese pixel de pantalla se queda bajo ese mismo
+  // pixel después de cambiar el zoom. Para eso ajusta panX/panY junto con zoom.
+  // ---------------------------------------------------------------------------
+  const zoomAtPoint = useCallback(
+    (newZoom: number, clientX: number, clientY: number) => {
+      const container = containerRef.current;
+      const cur = activeCanvasViewRef.current.zoom;
+      if (!container || newZoom === cur) {
+        setCanvasView({ zoom: newZoom });
+        return;
+      }
+      const rect = container.getBoundingClientRect();
+      // Offset del punto ancla desde el centro del container
+      const dx = (clientX - rect.left) - rect.width / 2;
+      const dy = (clientY - rect.top) - rect.height / 2;
+      const r = newZoom / cur;
+      const view = activeCanvasViewRef.current;
+      const newPanX = dx * (1 - r) + view.panX * r;
+      const newPanY = dy * (1 - r) + view.panY * r;
+      setCanvasView({ zoom: newZoom, panX: newPanX, panY: newPanY });
+    },
+    [setCanvasView]
+  );
+
+  // ---------------------------------------------------------------------------
   // Punto de entrada del pointer down (síncrono lo máximo posible)
   // ---------------------------------------------------------------------------
 
@@ -353,6 +380,8 @@ export function useDrawingEngine({
         zoomStartRef.current = {
           y: e.clientY,
           zoom: activeCanvasViewRef.current.zoom,
+          clientX: e.clientX,
+          clientY: e.clientY,
         };
         return;
       }
@@ -398,10 +427,11 @@ export function useDrawingEngine({
         return;
       }
 
-      // --- Zoom: síncrono (toggle zoom x2 / x1) ---
+      // --- Zoom: toggle x2/x1 anclado en el click ---
       if (tool === "zoom") {
         const cur = activeCanvasViewRef.current.zoom;
-        setCanvasView({ zoom: cur > 1 ? 1 : 2 });
+        const newZoom = cur > 1 ? 1 : 2;
+        zoomAtPoint(newZoom, e.clientX, e.clientY);
         return;
       }
 
@@ -606,7 +636,7 @@ export function useDrawingEngine({
         configureEraser(ctx, b, pressureRef.current);
       }
     },
-    [getCanvasPoint, loadDrawingIntoCanvas, commitDrawing, setTool, setCanvasView, drawingCanvasRef]
+    [getCanvasPoint, loadDrawingIntoCanvas, commitDrawing, setTool, setCanvasView, zoomAtPoint, drawingCanvasRef]
   );
 
   // ---------------------------------------------------------------------------
@@ -650,12 +680,15 @@ export function useDrawingEngine({
       // Zoom por arrastre (modificador Z apretado + drag)
       // dy < 0 (arrastra hacia arriba) → zoom in
       // dy > 0 (arrastra hacia abajo) → zoom out
+      // Anclado en el punto de inicio del drag (zoomStartRef.clientX/Y):
+      // el punto del canvas bajo ese pixel se queda ahí mientras dura el drag.
       if (isZoomingRef.current && zoomStartRef.current) {
-        const dy = e.clientY - zoomStartRef.current.y;
+        const start = zoomStartRef.current;
+        const dy = e.clientY - start.y;
         // Cada 100px de drag cambia el zoom por un factor de 2
         const factor = Math.exp(-dy / 200);
-        const newZoom = Math.max(0.05, Math.min(20, zoomStartRef.current.zoom * factor));
-        setCanvasView({ zoom: newZoom });
+        const newZoom = Math.max(0.05, Math.min(20, start.zoom * factor));
+        zoomAtPoint(newZoom, start.clientX, start.clientY);
         return;
       }
 
@@ -825,7 +858,7 @@ export function useDrawingEngine({
         octx.setLineDash([]);
       }
     },
-    [getCanvasPoint, setCanvasView, drawingCanvasRef, overlayCanvasRef]
+    [getCanvasPoint, setCanvasView, zoomAtPoint, drawingCanvasRef, overlayCanvasRef]
   );
 
   const handleUp = useCallback(
@@ -917,20 +950,43 @@ export function useDrawingEngine({
   );
 
   // ---------------------------------------------------------------------------
-  // Wheel para zoom
+  // Wheel para zoom — centrado en el cursor
   // ---------------------------------------------------------------------------
+  // El punto del canvas que está bajo el cursor debe quedarse bajo el cursor
+  // después del cambio de zoom. Para eso ajustamos panX/panY al mismo tiempo
+  // que zoom.
+  //
+  // Derivación:
+  //   El canvas está centrado en el container (translate -50%,-50%) con offset
+  //   (panX, panY). La posición del centro del canvas en coords del container
+  //   es (cw/2 + panX, ch/2 + panY). Un punto del canvas a distancia (cx, cy)
+  //   del centro aparece en pantalla en:
+  //     screen = canvasCenter + (cx, cy) * zoom   (ignorando rotación, que
+  //     no afecta la fórmula porque trabajamos con offsets relativos)
+  //   El punto bajo el cursor ANTES del zoom:
+  //     cx = (mouseX - canvasCenterX_old) / zoom_old
+  //   Queremos que DESPUES del zoom ese mismo punto siga en mouseX:
+  //     mouseX = canvasCenterX_new + cx * zoom_new
+  //   Despejando canvasCenterX_new y sabiendo que canvasCenterX = cw/2 + panX:
+  //     panX_new = (mouseX - cw/2) * (1 - r) + panX_old * r
+  //   donde r = zoom_new / zoom_old. Idem para Y.
 
   const handleWheel = useCallback(
     (e: WheelEvent) => {
       const proj = activeProjectRef.current;
       if (!proj) return;
+      const container = containerRef.current;
+      if (!container) return;
       e.preventDefault();
+
       const delta = -e.deltaY * 0.001;
       const cur = activeCanvasViewRef.current.zoom;
       const newZoom = Math.max(0.05, Math.min(20, cur * (1 + delta * 2)));
-      setCanvasView({ zoom: newZoom });
+      if (newZoom === cur) return;
+      // Zoom anclado en la posición actual del cursor
+      zoomAtPoint(newZoom, e.clientX, e.clientY);
     },
-    [setCanvasView]
+    [zoomAtPoint]
   );
 
   // ---------------------------------------------------------------------------
