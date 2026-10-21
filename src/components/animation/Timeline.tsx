@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useRef, useEffect } from "react";
+import React, { useMemo, useRef, useEffect, useState } from "react";
 import { useStore, getOrderedLayers } from "@/lib/animation/store";
 import { findCellAtFrame, totalFrames, formatFrame } from "@/lib/animation/utils";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import {
   SkipForward,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Repeat,
   Plus,
   Copy,
@@ -18,6 +19,11 @@ import {
   Flag,
   Rewind,
   FastForward,
+  PenLine,
+  ImageIcon,
+  Music,
+  Square as SquareIcon,
+  Layers as LayersIcon,
 } from "lucide-react";
 import { genId } from "@/lib/animation/utils";
 
@@ -35,12 +41,17 @@ export function Timeline() {
   const insertEmptyFrame = useStore((s) => s.insertEmptyFrame);
   const removeCell = useStore((s) => s.removeCell);
   const duplicateCell = useStore((s) => s.duplicateCell);
+  const addLayer = useStore((s) => s.addLayer);
+  const deleteLayer = useStore((s) => s.deleteLayer);
+  const duplicateLayer = useStore((s) => s.duplicateLayer);
   const addMarker = useStore((s) => s.addMarker);
   const deleteMarker = useStore((s) => s.deleteMarker);
 
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const frameWidth = 24; // ancho de cada celda en px
   const layerHeight = 36;
+  // Ref para el menú desplegable "agregar capa" (click fuera cierra)
+  const [showLayerMenu, setShowLayerMenu] = useState(false);
 
   // Total de frames (extensible)
   const total = useMemo(() => {
@@ -158,6 +169,88 @@ export function Timeline() {
           </Button>
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => insertEmptyFrame(project.currentLayerId!, project.currentFrame)} title="Insertar vacío">
             <Plus size={14} /> Vacío
+          </Button>
+        </div>
+
+        <div className="h-5 w-px bg-border" />
+
+        {/* Sección Capas: agregar / duplicar / borrar */}
+        <div className="flex items-center gap-1 relative">
+          {/* Botón principal con menú desplegable: click = agregar capa de dibujo,
+              click en la flecha = abrir menú con otros tipos */}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-xs"
+            title="Nueva capa de dibujo (clic en la flecha para otros tipos)"
+            onClick={() => addLayer("draw")}
+          >
+            <LayersIcon size={14} /> Capa
+          </Button>
+          <button
+            className="px-1 h-7 text-muted-foreground hover:text-foreground hover:bg-muted rounded text-xs"
+            title="Otros tipos de capa"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowLayerMenu((v) => !v);
+            }}
+          >
+            <ChevronDown size={12} />
+          </button>
+          {showLayerMenu && (
+            <>
+              {/* Overlay para cerrar al hacer clic fuera */}
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => setShowLayerMenu(false)}
+              />
+              <div className="absolute top-8 left-0 z-50 bg-background border border-border rounded shadow-lg py-1 min-w-[160px]">
+                <button
+                  className="flex items-center gap-2 w-full px-3 py-1.5 text-xs hover:bg-muted text-left"
+                  onClick={() => { addLayer("draw"); setShowLayerMenu(false); }}
+                >
+                  <PenLine size={12} /> Capa de dibujo
+                </button>
+                <button
+                  className="flex items-center gap-2 w-full px-3 py-1.5 text-xs hover:bg-muted text-left"
+                  onClick={() => { addLayer("reference"); setShowLayerMenu(false); }}
+                >
+                  <ImageIcon size={12} /> Capa de referencia
+                </button>
+                <button
+                  className="flex items-center gap-2 w-full px-3 py-1.5 text-xs hover:bg-muted text-left"
+                  onClick={() => { addLayer("background"); setShowLayerMenu(false); }}
+                >
+                  <SquareIcon size={12} /> Capa de fondo
+                </button>
+                <button
+                  className="flex items-center gap-2 w-full px-3 py-1.5 text-xs hover:bg-muted text-left"
+                  onClick={() => { addLayer("audio"); setShowLayerMenu(false); }}
+                >
+                  <Music size={12} /> Capa de audio
+                </button>
+              </div>
+            </>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 w-7 p-0"
+            title="Duplicar capa actual"
+            disabled={!project.currentLayerId}
+            onClick={() => project.currentLayerId && duplicateLayer(project.currentLayerId)}
+          >
+            <Copy size={14} />
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+            title="Borrar capa actual"
+            disabled={!project.currentLayerId || project.layers.length <= 1}
+            onClick={() => project.currentLayerId && deleteLayer(project.currentLayerId)}
+          >
+            <Trash2 size={14} />
           </Button>
         </div>
 
