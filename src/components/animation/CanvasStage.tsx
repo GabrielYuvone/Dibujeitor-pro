@@ -70,7 +70,12 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   // (porque se está reseteando entre frames) y solo se ve el composited.
   // En edit mode, AMBOS canvases están visibles: el composited (con onion
   // skin + capas no-activas) DEBAJO del drawing canvas (la capa activa).
-  const isCompositing = viewMode === "preview" || playback.playing;
+  //
+  // EXCEPCIÓN: cuando el tool activo es "move-layer", también compositamos
+  // la capa activa (con su transform) y ocultamos el drawingCanvas. Si no,
+  // el usuario vería la capa estática en (0,0) en el drawingCanvas y no
+  // notaría el desplazamiento durante el drag (solo lo vería al hacer play).
+  const isCompositing = viewMode === "preview" || playback.playing || currentTool === "move-layer";
 
   // ---------------------------------------------------------------------------
   // Pintar fondo
@@ -146,7 +151,11 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
 
     // En edit mode (sin playback), la capa activa se muestra en el drawing
     // canvas (arriba). La excluimos del composited para no duplicar.
-    const excludeActiveLayer = viewMode === "edit" && !playback.playing;
+    // PERO si el tool activo es "move-layer", queremos ver la capa activa
+    // compositada CON su transform — excluirla significaría no ver el
+    // desplazamiento en tiempo real durante el drag.
+    const excludeActiveLayer =
+      viewMode === "edit" && !playback.playing && currentTool !== "move-layer";
     const activeLayerId = project.currentLayerId;
 
     // Onion skin primero (debajo de las capas reales) — solo en edit mode
@@ -207,7 +216,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
         ctx.fillText(btn.label, btn.x + btn.width / 2, btn.y + btn.height / 2);
       }
     }
-  }, [project, onion, viewMode, playback.playing]);
+  }, [project, onion, viewMode, playback.playing, currentTool]);
 
   // ---------------------------------------------------------------------------
   // Dibujar overlay del placement de imagen (modo transformación)
