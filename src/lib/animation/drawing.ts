@@ -519,22 +519,39 @@ export function floodFill(
   tolerance = 32
 ) {
   const { width, height, data } = imageData;
-  // Mapear tolerancia (0-100) a distancia euclidiana RGBA.
-  // Distancia máxima RGBA = sqrt(4 * 255²) ≈ 510.
-  // Usamos una curva exponencial para mejor control en valores bajos:
-  // tol 1  → threshold ≈ 4   (muy preciso, no cruza anti-aliasing)
-  // tol 10 → threshold ≈ 44  (preciso, solo idénticos)
-  // tol 30 → threshold ≈ 132 (cubre anti-aliasing suave, alpha ~128)
-  // tol 50 → threshold ≈ 221 (cubre anti-aliasing fuerte)
-  // tol 100 → threshold = 441 (cubre todo, incluido cruzar líneas opacas)
+  // Mapeo de tolerancia (0-100) → dos umbrales independientes:
   //
-  // IMPORTANTE: La comparación incluye ALPHA. Antes solo comparábamos RGB,
-  // lo que hacía que un píxel transparente (0,0,0,0) coincidiera con un
-  // trazo opaco negro (0,0,0,255) → el flood cruzaba la línea y pintaba
-  // todo el canvas. Ahora alpha=255 vs alpha=0 → distancia 255 → no coincide.
+  // 1. Umbral RGB (curva potencial 0.7):
+  //    tol 1  → ≈ 4    (muy preciso)
+  //    tol 10 → ≈ 44
+  //    tol 30 → ≈ 132
+  //    tol 50 → ≈ 221
+  //    tol 100 → 441 (= máx RGB sqrt(3·255²))
+  //
+  // 2. Umbral ALPHA (lineal, tol/100 · 255):
+  //    tol 1  → ≈ 2.5
+  //    tol 33 → ≈ 84
+  //    tol 50 → ≈ 127
+  //    tol 100 → 255 (sin restricción)
+  //
+  // AMBAS compuertas deben pasar para que un píxel coincida.
+  //
+  // ¿Por qué una compuerta de alpha SEPARADA? Sin ella, el flood se cuela
+  // por los píxeles anti-aliased del borde de un trazo opaco. Ejemplo:
+  // círculo negro cerrado, click adentro (sobre transparente alpha=0).
+  // El borde AA del trazo tiene píxeles con alpha 20, 50, 100, 150, 200, 255.
+  // Si solo usamos distancia RGBA, alpha=100 da distancia 100, que a tol=33
+  // (umbral 203) coincide → el flood avanza por esos píxeles puente y
+  // aparece del otro lado del trazo, pintando todo el canvas.
+  //
+  // Con la compuerta de alpha lineal (84 a tol=33), los píxeles con alpha > 84
+  // NO coinciden con un start transparente, así que el flood se frena en el
+  // borde AA del trazo y no puede cruzar al otro lado. Solo a tol=100
+  // (umbral 255) el flood cruza líneas opacas, que es lo esperado.
   const tolClamped = Math.max(0, Math.min(100, tolerance));
   const euclidThreshold = Math.pow(tolClamped / 100, 0.7) * 441;
   const euclidThresholdSq = euclidThreshold * euclidThreshold;
+  const alphaThreshold = (tolClamped / 100) * 255;
 
   startX = Math.floor(startX);
   startY = Math.floor(startY);
@@ -564,8 +581,7 @@ export function floodFill(
   const filled = new Uint8Array(width * height);
 
   // Fase 1: Flood fill normal — marcar qué píxeles se rellenan
-  // Comparación RGBA: si el click fue sobre transparente (alpha=0),
-  // el flood no debe cruzar líneas opacas (alpha=255) — son "distinto color".
+  // Doble compuerta: RGB euclidiano + |Δalpha| lineal. AMBAS deben pasar.
   while (stack.length > 0) {
     const [x, y] = stack.pop()!;
     if (x < 0 || x >= width || y < 0 || y >= height) continue;
@@ -581,14 +597,15 @@ export function floodFill(
     const dg = g - sg;
     const db = b - sb;
     const da = a - sa;
-    // Distancia euclidiana RGBA. El alpha pesa igual que cada canal de color.
-    // Esto hace que un salto transparente→opaco cuente como diferencia 255,
-    // mucho mayor que cualquier tolerancia razonable (< 221), frenando el flood
-    // en los bordes de líneas/contornos opacos.
-    const distSq = dr * dr + dg * dg + db * db + da * da;
-    if (distSq > euclidThresholdSq) {
-      continue;
-    }
+
+    // Compuerta 1: color RGB similar al start (curva 0.7).
+    const rgbDistSq = dr * dr + dg * dg + db * db;
+    if (rgbDistSq > euclidThresholdSq) continue;
+
+    // Compuerta 2: alpha similar al start (lineal).
+    // CRÍTICA para que el flood no se cuele por el borde anti-aliased
+    // de un trazo opaco (que tiene píxeles con alpha intermedio).
+    if (da < 0 ? -da : da > alphaThreshold) continue;
 
     visited[p] = 1;
     filled[p] = 1;
