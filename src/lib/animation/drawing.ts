@@ -256,12 +256,22 @@ export function drawInkDab(
 /**
  * Dibuja un segmento de trazo con acuarela.
  *
- * La acuarela NO es circular. Simula una brocha real con cerdas:
- * - Dibuja múltiples líneas paralelas (cerdas) con separación irregular
- * - Cada cerda tiene opacidad variable (efecto de carga desigual)
- * - Los bordes son irregulares y deshilachados (no redondos)
- * - Acumulación gradual con 'multiply' para mezcla de color
- * - Efecto de "poca pintura" al final: cerdas se rompen y aclaran
+ * Emulación de acuarela real con manchas suaves tipo nube:
+ * - Cada stamp es una mancha radial con gradiente suave (borde difuminado)
+ * - Muchos stamps superpuestos a lo largo del trazo forman una nube continua
+ * - `globalCompositeOperation = "multiply"` oscurece zonas donde el trazo
+ *   se pisa a sí mismo o cruza otras zonas pintadas — emula la acumulación
+ *   de pigmento al volver a pasar el pincel
+ * - "Wet edge": anillo ligeramente más oscuro justo antes del borde
+ *   (el agua arrastra pigmento a los bordes de la mancha)
+ * - Granulación: pequeñas motas aleatorias para textura de papel
+ * - Jitter fuerte en tamaño/posición/forma para evitar repetición mecánica
+ *
+ * Cambio respecto a la versión anterior (cerdas): las cerdas producían un
+ * patrón de "pincel seco" — muy distinto a una acuarela real, que es una
+ * nube uniforme con bordes suaves. La nueva versión reemplaza las cerdas
+ * por manchas radiales con gradiente, que es lo que visualmente se
+ * parece a una mancha de agua sobre papel.
  */
 export function drawWatercolorSegment(
   ctx: CanvasRenderingContext2D,
@@ -275,76 +285,108 @@ export function drawWatercolorSegment(
   pressure = 1
 ) {
   const size = baseSize * pressure;
-  const alpha = baseAlpha * 0.3; // Translúcido para acumulación
+  // Alpha bajo: cada stamp aporta poco, la acumulación con multiply
+  // construye el color gradualmente. Si lo subimos, las superposiciones
+  // dentro del mismo trazo saturan demasiado rápido.
+  const alpha = baseAlpha * 0.22;
 
-  ctx.strokeStyle = baseColor;
-  ctx.fillStyle = baseColor;
-  ctx.lineCap = "butt"; // No redondo: las cerdas son rectas
-  ctx.lineJoin = "miter";
-  ctx.globalCompositeOperation = "multiply"; // Mezcla como acuarela
-
-  // Calcular ángulo y perpendicular del trazo
   const dx = x2 - x1;
   const dy = y2 - y1;
   const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 0.1) return;
-  const nx = -dy / len; // Normal perpendicular
-  const ny = dx / len;
+  if (len < 0.1) {
+    drawWatercolorDab(ctx, x2, y2, baseSize, baseColor, baseAlpha, pressure);
+    return;
+  }
 
-  // Número de cerdas proporcional al tamaño
-  const bristleCount = Math.max(5, Math.floor(size * 0.6));
-  const halfWidth = size / 2;
+  // Densidad de stamps: uno cada ~18% del radio. Esto crea una mancha
+  // continua (no puntos separados). Cuanto mayor el tamaño, más stamps
+  // se necesitan para mantener la continuidad visual.
+  const stampSpacing = Math.max(1, size * 0.18);
+  const stamps = Math.max(1, Math.ceil(len / stampSpacing));
 
-  // Dibujar cada cerda como una línea paralela con variación
-  for (let i = 0; i < bristleCount; i++) {
-    // Posición de la cerda en el ancho del pincel (distribución irregular)
-    const t = (i / (bristleCount - 1)) - 0.5; // -0.5 a 0.5
-    // Offset perpendicular con jitter irregular
-    const jitter = (Math.random() - 0.5) * (size * 0.08);
-    const offset = t * size + jitter;
-    const bx1 = x1 + nx * offset;
-    const by1 = y1 + ny * offset;
-    const bx2 = x2 + nx * offset;
-    const by2 = y2 + ny * offset;
+  ctx.globalCompositeOperation = "multiply";
 
-    // Opacidad variable por cerda (carga desigual)
-    // Cerda central más oscura, bordes más claros (efecto de pincel)
-    const distFromCenter = Math.abs(t);
-    const bristleAlpha = alpha * (1 - distFromCenter * 0.5) * (0.5 + Math.random() * 0.5);
-
-    // Algunas cerdas se rompen al final (poca pintura)
-    const breakPoint = 0.7 + Math.random() * 0.3;
-    const endX = bx1 + (bx2 - bx1) * breakPoint;
-    const endY = by1 + (by2 - by1) * breakPoint;
-
-    ctx.globalAlpha = bristleAlpha;
-    ctx.lineWidth = Math.max(0.3, size * 0.04 + Math.random() * size * 0.06);
-    ctx.beginPath();
-    ctx.moveTo(bx1, by1);
-    ctx.lineTo(endX, endY);
-    ctx.stroke();
-
-    // A veces agregar un punto de "salpicadura" en el extremo
-    if (Math.random() < 0.15 && breakPoint < 0.85) {
-      ctx.globalAlpha = bristleAlpha * 0.5;
-      ctx.beginPath();
-      ctx.arc(endX + (Math.random() - 0.5) * size * 0.2,
-              endY + (Math.random() - 0.5) * size * 0.2,
-              Math.max(0.3, size * 0.03), 0, Math.PI * 2);
-      ctx.fill();
-    }
+  for (let i = 0; i <= stamps; i++) {
+    const t = stamps === 0 ? 0 : i / stamps;
+    const cx = x1 + dx * t;
+    const cy = y1 + dy * t;
+    drawWatercolorBlob(ctx, cx, cy, size, baseColor, alpha);
   }
 
   // Reset
   ctx.globalCompositeOperation = "source-over";
   ctx.globalAlpha = 1;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
 }
 
 /**
- * Dibuja un punto inicial de acuarela. Crea un parche de cerdas
- * irregulares translúcidas.
+ * Mancha individual de acuarela — un blob suave con:
+ *  - Gradiente radial (centro más claro, borde difuminado)
+ *  - Wet edge: anillo más oscuro al ~85% del radio
+ *  - Contorno deformado (14 puntos con jitter) para que no sea circular perfecto
+ *  - Granulación: 0-3 motas de textura
+ */
+function drawWatercolorBlob(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  size: number,
+  color: string,
+  alpha: number
+) {
+  // Jitter fuerte: posición, tamaño y forma varían en cada stamp
+  const jitterX = (Math.random() - 0.5) * size * 0.08;
+  const jitterY = (Math.random() - 0.5) * size * 0.08;
+  const r = size * 0.5;
+  const rJitter = r * (0.88 + Math.random() * 0.22);
+  const ox = cx + jitterX;
+  const oy = cy + jitterY;
+
+  // Gradiente radial con wet edge:
+  //   0.0  → alpha * 0.55  (centro: agua acumulada, pigmento diluido)
+  //   0.55 → alpha * 0.45  (mid: aún diluido)
+  //   0.85 → alpha * 1.0   (wet edge: pigmento concentrado en el borde)
+  //   1.0  → 0             (fade suave fuera del blob)
+  const grad = ctx.createRadialGradient(ox, oy, rJitter * 0.08, ox, oy, rJitter);
+  grad.addColorStop(0, withAlpha(color, alpha * 0.55));
+  grad.addColorStop(0.55, withAlpha(color, alpha * 0.45));
+  grad.addColorStop(0.85, withAlpha(color, alpha));
+  grad.addColorStop(1, withAlpha(color, 0));
+
+  ctx.fillStyle = grad;
+  ctx.globalAlpha = 1; // alpha ya está en el gradiente
+  ctx.beginPath();
+  // Contorno deformado para evitar círculo mecánico
+  const points = 14;
+  for (let i = 0; i < points; i++) {
+    const a = (i / points) * Math.PI * 2;
+    const rr = rJitter * (0.9 + Math.random() * 0.18);
+    const px = ox + Math.cos(a) * rr;
+    const py = oy + Math.sin(a) * rr;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // Granulación: pequeñas motas oscuras dispersas dentro del blob
+  // emulan la textura del papel (el pigmento se acumula en la rugosidad)
+  const granuleCount = Math.floor(Math.random() * 4);
+  for (let i = 0; i < granuleCount; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const d = Math.random() * rJitter * 0.7;
+    const px = ox + Math.cos(a) * d;
+    const py = oy + Math.sin(a) * d;
+    ctx.globalAlpha = alpha * (0.2 + Math.random() * 0.25);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(px, py, Math.max(0.3, size * 0.015 + Math.random() * size * 0.015), 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/**
+ * Dab inicial de acuarela — 3 manchas solapadas con jitter para
+ * crear un parche de inicio irregular (no un único círculo perfecto).
  */
 export function drawWatercolorDab(
   ctx: CanvasRenderingContext2D,
@@ -356,35 +398,21 @@ export function drawWatercolorDab(
   pressure = 1
 ) {
   const size = baseSize * pressure;
-  const alpha = baseAlpha * 0.3;
+  const alpha = baseAlpha * 0.22;
 
-  ctx.fillStyle = baseColor;
   ctx.globalCompositeOperation = "multiply";
 
-  // Dibujar cerdas iniciales en múltiples direcciones
-  const bristleCount = Math.max(5, Math.floor(size * 0.6));
-  for (let i = 0; i < bristleCount; i++) {
-    const angle = (i / bristleCount) * Math.PI * 2 + Math.random() * 0.3;
-    const r = Math.random() * size * 0.5;
-    const px = x + Math.cos(angle) * r;
-    const py = y + Math.sin(angle) * r;
-    const bristleAlpha = alpha * (0.4 + Math.random() * 0.6);
-    const bristleSize = Math.max(0.3, size * 0.04 + Math.random() * size * 0.06);
-
-    ctx.globalAlpha = bristleAlpha;
-    // Pequeña línea en dirección del ángulo
-    const len = size * 0.15 * Math.random();
-    ctx.lineWidth = bristleSize;
-    ctx.lineCap = "butt";
-    ctx.beginPath();
-    ctx.moveTo(px, py);
-    ctx.lineTo(px + Math.cos(angle) * len, py + Math.sin(angle) * len);
-    ctx.stroke();
+  // 3 manchas solapadas con offsets y tamaños variados
+  const blobs = 3;
+  for (let i = 0; i < blobs; i++) {
+    const ox = (Math.random() - 0.5) * size * 0.3;
+    const oy = (Math.random() - 0.5) * size * 0.3;
+    const sz = size * (0.7 + Math.random() * 0.5);
+    drawWatercolorBlob(ctx, x + ox, y + oy, sz, baseColor, alpha);
   }
 
   ctx.globalCompositeOperation = "source-over";
   ctx.globalAlpha = 1;
-  ctx.lineCap = "round";
 }
 
 // ---------------------------------------------------------------------------
