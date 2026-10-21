@@ -159,10 +159,13 @@ export function Toolbar() {
         </div>
       </div>
 
-      {/* Tolerancia de relleno (solo relevante para el bote de tinta) */}
+      {/* --- Seteos por herramienta --- */}
+
+      {/* Tolerancia de relleno: SOLO para la herramienta Relleno (fill) */}
+      {currentTool === "fill" && (
       <div>
         <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex justify-between">
-          <span>Tolerancia relleno</span>
+          <span>Tolerancia</span>
           <span className="text-foreground">{Math.round(brush.fillTolerance)}</span>
         </div>
         <input
@@ -175,8 +178,11 @@ export function Toolbar() {
           className="w-full"
         />
       </div>
+      )}
 
-      {/* Tamaño del pincel */}
+      {/* Tamaño: para todas las herramientas de trazo (no fill/selection/eyedropper/pan/zoom) */}
+      {(currentTool === "pencil" || currentTool === "brush" || currentTool === "ink" ||
+        currentTool === "watercolor" || currentTool === "eraser") && (
       <div>
         <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex justify-between">
           <span>Tamaño</span>
@@ -192,8 +198,11 @@ export function Toolbar() {
           className="w-full"
         />
       </div>
+      )}
 
-      {/* Opacidad */}
+      {/* Opacidad: para herramientas de trazo (no fill/selection) */}
+      {(currentTool === "pencil" || currentTool === "brush" || currentTool === "ink" ||
+        currentTool === "watercolor" || currentTool === "eraser") && (
       <div>
         <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex justify-between">
           <span>Opacidad</span>
@@ -209,8 +218,10 @@ export function Toolbar() {
           className="w-full"
         />
       </div>
+      )}
 
-      {/* Dureza */}
+      {/* Dureza: solo para pincel y goma */}
+      {(currentTool === "brush" || currentTool === "eraser") && (
       <div>
         <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex justify-between">
           <span>Dureza</span>
@@ -226,8 +237,11 @@ export function Toolbar() {
           className="w-full"
         />
       </div>
+      )}
 
-      {/* Suavizado */}
+      {/* Estabilización: para herramientas de trazo libre (no fill/line/rect/ellipse) */}
+      {(currentTool === "pencil" || currentTool === "brush" || currentTool === "ink" ||
+        currentTool === "watercolor" || currentTool === "eraser") && (
       <div>
         <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex justify-between">
           <span>Estabilización</span>
@@ -243,8 +257,11 @@ export function Toolbar() {
           className="w-full"
         />
       </div>
+      )}
 
-      {/* Sensibilidad a presión */}
+      {/* Sensibilidad a presión: para herramientas de trazo */}
+      {(currentTool === "pencil" || currentTool === "brush" || currentTool === "ink" ||
+        currentTool === "watercolor" || currentTool === "eraser") && (
       <div className="flex items-center justify-between text-xs">
         <label htmlFor="pressure">Sensibilidad a presión</label>
         <input
@@ -254,7 +271,10 @@ export function Toolbar() {
           onChange={(e) => setBrush({ pressureSensitivity: e.target.checked })}
         />
       </div>
+      )}
 
+      {/* Goma suave: solo para goma */}
+      {currentTool === "eraser" && (
       <div className="flex items-center justify-between text-xs">
         <label htmlFor="eraser-mode">Goma suave</label>
         <input
@@ -264,6 +284,7 @@ export function Toolbar() {
           onChange={(e) => setBrush({ eraserMode: e.target.checked ? "soft" : "solid" })}
         />
       </div>
+      )}
 
       {/* Reset */}
       <button

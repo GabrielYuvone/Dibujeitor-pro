@@ -519,8 +519,16 @@ export function floodFill(
   tolerance = 32
 ) {
   const { width, height, data } = imageData;
-  const tol = Math.min(200, Math.max(0, tolerance));
-  const euclidThreshold = Math.sqrt(3) * tol;
+  // Mapear tolerancia (0-100) a distancia euclidiana RGB.
+  // Distancia máxima RGB = sqrt(3 * 255²) ≈ 441.
+  // Usamos una curva exponencial para mejor control en valores bajos:
+  // tol 1 → threshold ≈ 4 (muy preciso)
+  // tol 10 → threshold ≈ 44
+  // tol 30 → threshold ≈ 132 (cubre anti-aliasing suave)
+  // tol 50 → threshold ≈ 221 (cubre anti-aliasing fuerte)
+  // tol 100 → threshold = 441 (cubre todo)
+  const tolClamped = Math.max(0, Math.min(100, tolerance));
+  const euclidThreshold = Math.pow(tolClamped / 100, 0.7) * 441;
   const euclidThresholdSq = euclidThreshold * euclidThreshold;
 
   startX = Math.floor(startX);
@@ -578,9 +586,11 @@ export function floodFill(
     stack.push([x, y - 1]);
   }
 
-  // Fase 2: Detectar píxeles de borde y mezclar colores
-  // Un píxel es "borde" si está rellenado pero tiene al menos un vecino
-  // que NO fue rellenado (es decir, está junto a la línea o al anti-aliasing).
+  // Fase 2: Pintar píxeles rellenados con mezcla anti-aliasing
+  // Los píxeles que eran fondo puro se pintan con color sólido.
+  // Los píxeles que estaban en la zona de anti-aliasing (mezcla de
+  // fondo y línea) se mezclan con el color de relleno proporcionalmente,
+  // preservando la suavidad del borde.
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const p = y * width + x;
@@ -592,33 +602,29 @@ export function floodFill(
       const origB = originalData[idx + 2];
       const origA = originalData[idx + 3];
 
-      // Calcular distancia del color original al color del fondo inicial
+      // Distancia del color original al fondo inicial
       const dr = origR - sr;
       const dg = origG - sg;
       const db = origB - sb;
-      const distSq = dr * dr + dg * dg + db * db;
+      const distFromBg = Math.sqrt(dr * dr + dg * dg + db * db);
 
-      // Si el píxel es muy diferente al fondo original (cerca de la línea),
-      // es un píxel de anti-aliasing → mezclar
-      if (distSq > 10) {
-        // Calcular factor de mezcla basado en la distancia al color original
-        // Más cerca del color de línea → más mezcla
-        const distFromBg = Math.sqrt(distSq);
-        const distFromLine = Math.max(0, euclidThreshold - distFromBg);
-        const mixFactor = distFromBg > 0 ? Math.min(1, distFromBg / euclidThreshold) : 0;
-
-        // Mezclar: más mezcla cuando el píxel está cerca del borde de la línea
-        const blend = 1 - mixFactor; // 0 = puro relleno, 1 = puro original
-        data[idx] = Math.round(fillColor.r * (1 - blend) + origR * blend);
-        data[idx + 1] = Math.round(fillColor.g * (1 - blend) + origG * blend);
-        data[idx + 2] = Math.round(fillColor.b * (1 - blend) + origB * blend);
-        data[idx + 3] = Math.max(fillColor.a, origA);
-      } else {
-        // Píxel del fondo puro — rellenar con color sólido
+      if (distFromBg < 5) {
+        // Píxel de fondo puro — color sólido del relleno
         data[idx] = fillColor.r;
         data[idx + 1] = fillColor.g;
         data[idx + 2] = fillColor.b;
         data[idx + 3] = fillColor.a;
+      } else {
+        // Píxel de anti-aliasing — mezclar proporcionalmente
+        // Cuanto más cerca del color de línea (distFromBg alto),
+        // más conservamos el color original.
+        // Cuanto más cerca del fondo (distFromBg bajo),
+        // más usamos el color de relleno.
+        const blend = Math.min(1, distFromBg / euclidThreshold);
+        data[idx] = Math.round(fillColor.r * (1 - blend) + origR * blend);
+        data[idx + 1] = Math.round(fillColor.g * (1 - blend) + origG * blend);
+        data[idx + 2] = Math.round(fillColor.b * (1 - blend) + origB * blend);
+        data[idx + 3] = Math.max(fillColor.a, origA);
       }
     }
   }

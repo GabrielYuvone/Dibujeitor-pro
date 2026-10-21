@@ -318,6 +318,33 @@ export function Timeline() {
                       <span className="ml-1 text-[10px] truncate flex-1">
                         {cell.label || (drawing?.name ?? (cell.drawingId ? "" : "(vacío)"))}
                       </span>
+                      {/* Handle de resize en el borde derecho de la celda */}
+                      <div
+                        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-primary/40"
+                        title="Arrastrá para cambiar la duración (exposición)"
+                        onPointerDown={(e) => {
+                          e.stopPropagation();
+                          const startX = e.clientX;
+                          const startDuration = cell.duration;
+                          const startFrame = cell.startFrame;
+                          const layerId = layer.id;
+                          const handle = e.currentTarget;
+                          (e.target as HTMLElement).setPointerCapture(e.pointerId);
+
+                          const onMove = (ev: PointerEvent) => {
+                            const dx = ev.clientX - startX;
+                            const framesDelta = Math.round(dx / frameWidth);
+                            const newDuration = Math.max(1, startDuration + framesDelta);
+                            useStore.getState().extendCell(layerId, startFrame, newDuration - startDuration);
+                          };
+                          const onUp = () => {
+                            window.removeEventListener("pointermove", onMove);
+                            window.removeEventListener("pointerup", onUp);
+                          };
+                          window.addEventListener("pointermove", onMove);
+                          window.addEventListener("pointerup", onUp);
+                        }}
+                      />
                     </div>
                   );
                 })}
@@ -335,45 +362,7 @@ export function Timeline() {
       </div>
 
       {/* Indicador de frame actual (línea roja) — se dibuja como overlay */}
-      <FrameCursor frameWidth={frameWidth} total={total} layerCount={orderedLayers.length} layerHeight={layerHeight} />
     </div>
-  );
-}
-
-function FrameCursor({
-  frameWidth,
-  total,
-  layerCount,
-  layerHeight,
-}: {
-  frameWidth: number;
-  total: number;
-  layerCount: number;
-  layerHeight: number;
-}) {
-  const currentFrame = useStore((s) => s.project?.currentFrame ?? 0);
-  const timelineRef = useRef<HTMLDivElement | null>(null);
-
-  // Buscar el contenedor scrollable
-  useEffect(() => {
-    if (!timelineRef.current) {
-      const el = document.querySelector("[data-timeline-body]");
-      if (el) timelineRef.current = el as HTMLDivElement;
-    }
-  }, []);
-
-  const left = 192 + currentFrame * frameWidth; // 192 = ancho lista de capas
-
-  return (
-    <div
-      className="absolute top-0 bottom-0 pointer-events-none z-10"
-      style={{
-        left,
-        width: 2,
-        backgroundColor: "#ef4444",
-        height: 28 + layerCount * layerHeight,
-      }}
-    />
   );
 }
 

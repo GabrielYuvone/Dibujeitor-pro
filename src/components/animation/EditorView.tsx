@@ -37,7 +37,6 @@ import { CanvasStage } from "./CanvasStage";
 import { Toolbar } from "./Toolbar";
 import { LayersPanel } from "./LayersPanel";
 import { Timeline } from "./Timeline";
-import { FrameScrubber } from "./FrameScrubber";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { OnionSkinPanel } from "./OnionSkinPanel";
 import { HelpPanel } from "./HelpPanel";
@@ -328,8 +327,6 @@ export function EditorView() {
               <div className="flex-1 relative">
                 <CanvasStage width={project.settings.width} height={project.settings.height} />
               </div>
-              {/* Frame scrubber (barra de navegación rápida entre lienzo y timeline) */}
-              <FrameScrubber />
 
               {/* Timeline abajo */}
               <div className="h-72 shrink-0">
