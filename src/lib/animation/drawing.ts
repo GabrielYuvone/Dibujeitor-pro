@@ -519,14 +519,19 @@ export function floodFill(
   tolerance = 32
 ) {
   const { width, height, data } = imageData;
-  // Mapear tolerancia (0-100) a distancia euclidiana RGB.
-  // Distancia máxima RGB = sqrt(3 * 255²) ≈ 441.
+  // Mapear tolerancia (0-100) a distancia euclidiana RGBA.
+  // Distancia máxima RGBA = sqrt(4 * 255²) ≈ 510.
   // Usamos una curva exponencial para mejor control en valores bajos:
-  // tol 1 → threshold ≈ 4 (muy preciso)
-  // tol 10 → threshold ≈ 44
-  // tol 30 → threshold ≈ 132 (cubre anti-aliasing suave)
+  // tol 1  → threshold ≈ 4   (muy preciso, no cruza anti-aliasing)
+  // tol 10 → threshold ≈ 44  (preciso, solo idénticos)
+  // tol 30 → threshold ≈ 132 (cubre anti-aliasing suave, alpha ~128)
   // tol 50 → threshold ≈ 221 (cubre anti-aliasing fuerte)
-  // tol 100 → threshold = 441 (cubre todo)
+  // tol 100 → threshold = 441 (cubre todo, incluido cruzar líneas opacas)
+  //
+  // IMPORTANTE: La comparación incluye ALPHA. Antes solo comparábamos RGB,
+  // lo que hacía que un píxel transparente (0,0,0,0) coincidiera con un
+  // trazo opaco negro (0,0,0,255) → el flood cruzaba la línea y pintaba
+  // todo el canvas. Ahora alpha=255 vs alpha=0 → distancia 255 → no coincide.
   const tolClamped = Math.max(0, Math.min(100, tolerance));
   const euclidThreshold = Math.pow(tolClamped / 100, 0.7) * 441;
   const euclidThresholdSq = euclidThreshold * euclidThreshold;
@@ -559,6 +564,8 @@ export function floodFill(
   const filled = new Uint8Array(width * height);
 
   // Fase 1: Flood fill normal — marcar qué píxeles se rellenan
+  // Comparación RGBA: si el click fue sobre transparente (alpha=0),
+  // el flood no debe cruzar líneas opacas (alpha=255) — son "distinto color".
   while (stack.length > 0) {
     const [x, y] = stack.pop()!;
     if (x < 0 || x >= width || y < 0 || y >= height) continue;
@@ -568,11 +575,17 @@ export function floodFill(
     const r = data[idx];
     const g = data[idx + 1];
     const b = data[idx + 2];
+    const a = data[idx + 3];
 
     const dr = r - sr;
     const dg = g - sg;
     const db = b - sb;
-    const distSq = dr * dr + dg * dg + db * db;
+    const da = a - sa;
+    // Distancia euclidiana RGBA. El alpha pesa igual que cada canal de color.
+    // Esto hace que un salto transparente→opaco cuente como diferencia 255,
+    // mucho mayor que cualquier tolerancia razonable (< 221), frenando el flood
+    // en los bordes de líneas/contornos opacos.
+    const distSq = dr * dr + dg * dg + db * db + da * da;
     if (distSq > euclidThresholdSq) {
       continue;
     }
@@ -602,11 +615,12 @@ export function floodFill(
       const origB = originalData[idx + 2];
       const origA = originalData[idx + 3];
 
-      // Distancia del color original al fondo inicial
+      // Distancia del color original al fondo inicial (RGBA)
       const dr = origR - sr;
       const dg = origG - sg;
       const db = origB - sb;
-      const distFromBg = Math.sqrt(dr * dr + dg * dg + db * db);
+      const da = origA - sa;
+      const distFromBg = Math.sqrt(dr * dr + dg * dg + db * db + da * da);
 
       if (distFromBg < 5) {
         // Píxel de fondo puro — color sólido del relleno
