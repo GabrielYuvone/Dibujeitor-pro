@@ -495,12 +495,21 @@ export function strokeEllipse(
 // ---------------------------------------------------------------------------
 
 /**
- * Flood fill sobre ImageData con tolerancia de color.
- * Implementación con pila (stack) para evitar desbordamiento.
+ * Flood fill con anti-aliasing en los bordes.
  *
- * La tolerancia se compara usando la distancia euclidiana en RGB
- * (sin incluir alfa), y el umbral se limita a un máximo de 200 para
- * evitar inundaciones demasiado agresivas.
+ * Mejora sobre el flood fill tradicional: en lugar de pintar los píxeles
+ * del borde (anti-aliasing de las líneas) con el color sólido del relleno,
+ * los mezcla proporcionalmente. Esto elimina el "halo" o rebaba visible
+ * cuando el relleno no llega exactamente hasta la línea.
+ *
+ * Algoritmo:
+ * 1. Flood fill normal con tolerancia euclidiana RGB
+ * 2. Para cada píxel rellenado que tiene un vecino NO rellenado (borde):
+ *    - Calcular cuánto del color original quedó (alpha residual)
+ *    - Mezclar el color de relleno con el color original proporcionalmente
+ * 3. Para los píxeles del borde anti-aliasing de la línea (vecinos de la
+ *    línea pero dentro de la tolerancia): mezclar su color con el relleno
+ *    según la distancia al color original del fondo
  */
 export function floodFill(
   imageData: ImageData,
@@ -510,9 +519,7 @@ export function floodFill(
   tolerance = 32
 ) {
   const { width, height, data } = imageData;
-  // Limitar la tolerancia a un máximo de 200
   const tol = Math.min(200, Math.max(0, tolerance));
-  // Umbral euclidiano en RGB (3 componentes, raíz de 3 * tol²)
   const euclidThreshold = Math.sqrt(3) * tol;
   const euclidThresholdSq = euclidThreshold * euclidThreshold;
 
@@ -526,7 +533,6 @@ export function floodFill(
   const sb = data[startIdx + 2];
   const sa = data[startIdx + 3];
 
-  // Si ya es del color objetivo, no hacer nada
   if (
     sr === fillColor.r &&
     sg === fillColor.g &&
@@ -536,9 +542,15 @@ export function floodFill(
     return;
   }
 
+  // Guardar los colores originales para la fase de mezclado en bordes
+  const originalData = new Uint8ClampedArray(data.length);
+  originalData.set(data);
+
   const stack: [number, number][] = [[startX, startY]];
   const visited = new Uint8Array(width * height);
+  const filled = new Uint8Array(width * height);
 
+  // Fase 1: Flood fill normal — marcar qué píxeles se rellenan
   while (stack.length > 0) {
     const [x, y] = stack.pop()!;
     if (x < 0 || x >= width || y < 0 || y >= height) continue;
@@ -548,9 +560,7 @@ export function floodFill(
     const r = data[idx];
     const g = data[idx + 1];
     const b = data[idx + 2];
-    // No usamos alpha en la comparación: solo RGB
 
-    // Distancia euclidiana en RGB
     const dr = r - sr;
     const dg = g - sg;
     const db = b - sb;
@@ -560,15 +570,57 @@ export function floodFill(
     }
 
     visited[p] = 1;
-    data[idx] = fillColor.r;
-    data[idx + 1] = fillColor.g;
-    data[idx + 2] = fillColor.b;
-    data[idx + 3] = fillColor.a;
+    filled[p] = 1;
 
     stack.push([x + 1, y]);
     stack.push([x - 1, y]);
     stack.push([x, y + 1]);
     stack.push([x, y - 1]);
+  }
+
+  // Fase 2: Detectar píxeles de borde y mezclar colores
+  // Un píxel es "borde" si está rellenado pero tiene al menos un vecino
+  // que NO fue rellenado (es decir, está junto a la línea o al anti-aliasing).
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const p = y * width + x;
+      if (!filled[p]) continue;
+
+      const idx = p * 4;
+      const origR = originalData[idx];
+      const origG = originalData[idx + 1];
+      const origB = originalData[idx + 2];
+      const origA = originalData[idx + 3];
+
+      // Calcular distancia del color original al color del fondo inicial
+      const dr = origR - sr;
+      const dg = origG - sg;
+      const db = origB - sb;
+      const distSq = dr * dr + dg * dg + db * db;
+
+      // Si el píxel es muy diferente al fondo original (cerca de la línea),
+      // es un píxel de anti-aliasing → mezclar
+      if (distSq > 10) {
+        // Calcular factor de mezcla basado en la distancia al color original
+        // Más cerca del color de línea → más mezcla
+        const distFromBg = Math.sqrt(distSq);
+        const distFromLine = Math.max(0, euclidThreshold - distFromBg);
+        const mixFactor = distFromBg > 0 ? Math.min(1, distFromBg / euclidThreshold) : 0;
+
+        // Mezclar: más mezcla cuando el píxel está cerca del borde de la línea
+        const blend = 1 - mixFactor; // 0 = puro relleno, 1 = puro original
+        data[idx] = Math.round(fillColor.r * (1 - blend) + origR * blend);
+        data[idx + 1] = Math.round(fillColor.g * (1 - blend) + origG * blend);
+        data[idx + 2] = Math.round(fillColor.b * (1 - blend) + origB * blend);
+        data[idx + 3] = Math.max(fillColor.a, origA);
+      } else {
+        // Píxel del fondo puro — rellenar con color sólido
+        data[idx] = fillColor.r;
+        data[idx + 1] = fillColor.g;
+        data[idx + 2] = fillColor.b;
+        data[idx + 3] = fillColor.a;
+      }
+    }
   }
 }
 
