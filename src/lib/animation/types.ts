@@ -60,7 +60,8 @@ export type ToolId =
   | "transform"
   | "eyedropper"
   | "pan"
-  | "zoom";
+  | "zoom"
+  | "move-layer";
 
 export type StrokeCap = "round" | "square" | "butt";
 export type StrokeJoin = "round" | "bevel" | "miter";
@@ -115,6 +116,23 @@ export type KeyframeType =
   | "inbetween"
   | "none";
 
+/**
+ * Keyframe de transformación de capa. Permite animar la posición,
+ * escala y rotación de una capa a lo largo del tiempo. Por ejemplo,
+ * un fondo que se desplaza horizontalmente mientras un personaje
+ * camina, o un elemento que crece desde el centro.
+ *
+ * La interpolación entre dos keyframes consecutivos es LINEAL en
+ * todos los canales (offsetX, offsetY, scale, rotation).
+ */
+export interface LayerTransformKeyframe {
+  frame: number;
+  offsetX: number;  // desplazamiento en píxeles (canvas coords)
+  offsetY: number;
+  scale: number;     // 1 = sin escala
+  rotation: number;  // grados, 0 = sin rotación
+}
+
 export interface Layer {
   id: ID;
   name: string;
@@ -130,6 +148,10 @@ export interface Layer {
   // Rango de bucle de la capa. Si está definido, la capa se repite dentro
   // de este rango al reproducir/exportar (útil para ciclos de caminata, etc.).
   loopRange?: { start: number; end: number; count: number } | null;
+  // Keyframes de transformación (offset/scale/rotation) animados a lo
+  // largo del tiempo. Ordenados por frame. Vacío = sin animación, capa
+  // se renderiza sin transform (offset 0, scale 1, rotation 0).
+  transformKeyframes?: LayerTransformKeyframe[];
 }
 
 // ---------------------------------------------------------------------------

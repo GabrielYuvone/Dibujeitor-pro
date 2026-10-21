@@ -31,7 +31,7 @@ import {
   dataUrlToImageData,
 } from "./drawing";
 import type { ToolId } from "./types";
-import { genId, totalFrames } from "./utils";
+import { genId, totalFrames, interpolateLayerTransform } from "./utils";
 
 interface DrawingEngineState {
   drawingCanvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -137,6 +137,17 @@ export function useDrawingEngine({
   const pastedImageRef = useRef<ImageData | null>(null);
   const pastedPosRef = useRef<{ x: number; y: number } | null>(null);
   const pastedOffsetRef = useRef<{ x: number; y: number } | null>(null);
+  // Refs para la herramienta "move-layer" — arrastrar mueve la capa actual
+  // y graba el offset en un keyframe de transform en el frame actual.
+  const isMovingLayerRef = useRef(false);
+  const moveLayerStartRef = useRef<{
+    startClientX: number;
+    startClientY: number;
+    startOffsetX: number;
+    startOffsetY: number;
+    layerId: string;
+    frame: number;
+  } | null>(null);
 
   // Listener para los modificadores X (eraser), C (pan), Ctrl (brush resize) y Z (zoom)
   useEffect(() => {
@@ -485,6 +496,28 @@ export function useDrawingEngine({
         return;
       }
 
+      // --- Herramienta "Mover capa" — arrastra la capa actual ---
+      // En pointerdown registramos el offset inicial (interpolado en este
+      // frame) y el clientX/Y inicial. En pointermove sumamos el delta
+      // (convertido a canvas coords dividiendo por zoom) al offset inicial
+      // y llamamos a setLayerTransformAtFrame para crear/actualizar el kf.
+      if (tool === "move-layer") {
+        if (!proj.currentLayerId) return;
+        const layer = proj.layers.find((l) => l.id === proj.currentLayerId);
+        if (!layer) return;
+        const t = interpolateLayerTransform(layer, proj.currentFrame);
+        isMovingLayerRef.current = true;
+        moveLayerStartRef.current = {
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          startOffsetX: t.offsetX,
+          startOffsetY: t.offsetY,
+          layerId: proj.currentLayerId,
+          frame: proj.currentFrame,
+        };
+        return;
+      }
+
       // Crear/obtener drawing para herramientas de dibujo
       const cell = layer.cells.find(
         (c) =>
@@ -704,6 +737,27 @@ export function useDrawingEngine({
         return;
       }
 
+      // Mover capa (herramienta "move-layer" en drag)
+      if (isMovingLayerRef.current && moveLayerStartRef.current) {
+        const start = moveLayerStartRef.current;
+        const dx = e.clientX - start.startClientX;
+        const dy = e.clientY - start.startClientY;
+        // Convertir delta de pantalla a coords de canvas dividiendo por zoom.
+        // El zoom está en canvasViewRef.
+        const zoom = activeCanvasViewRef.current.zoom || 1;
+        const newOffsetX = start.startOffsetX + dx / zoom;
+        const newOffsetY = start.startOffsetY + dy / zoom;
+        // Actualizar/crear el keyframe en el frame actual.
+        useStore.getState().setLayerTransformAtFrame(start.layerId, start.frame, {
+          offsetX: newOffsetX,
+          offsetY: newOffsetY,
+          scale: 1,        // por ahora solo offset — scale y rotation se editan
+                           // desde otros controles (TODO: handles visuales)
+          rotation: 0,
+        });
+        return;
+      }
+
       // Pan (tool "pan" o modificador C)
       if (isPanningRef.current && panStartRef.current) {
         const dx = e.clientX - panStartRef.current.x;
@@ -878,6 +932,13 @@ export function useDrawingEngine({
       if (isResizingBrushRef.current) {
         isResizingBrushRef.current = false;
         brushResizeStartRef.current = null;
+        return;
+      }
+      // Move-layer fin: el keyframe ya se actualizó durante el drag,
+      // solo limpiamos el estado.
+      if (isMovingLayerRef.current) {
+        isMovingLayerRef.current = false;
+        moveLayerStartRef.current = null;
         return;
       }
       // Pan fin

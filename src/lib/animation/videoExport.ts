@@ -7,7 +7,7 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile, toBlobURL } from "@ffmpeg/util";
 import type { AnimationProject, ExportOptions } from "./types";
-import { findCellAtFrame, totalFrames } from "./utils";
+import { findCellAtFrame, totalFrames, interpolateLayerTransform } from "./utils";
 import { getCachedImage, preloadImage } from "./useDrawingEngine";
 
 let ffmpegInstance: FFmpeg | null = null;
@@ -71,10 +71,23 @@ async function renderFrameToBlob(
     const img = getCachedImage(cell.drawingId);
     if (img && img.complete && img.naturalWidth > 0) {
       ctx.globalAlpha = layer.opacity;
-      // Reescalar al tamaño de salida
-      const srcW = img.naturalWidth;
-      const srcH = img.naturalHeight;
-      ctx.drawImage(img, 0, 0, srcW, srcH, 0, 0, width, height);
+      const t = interpolateLayerTransform(layer, frame);
+      const hasTransform =
+        t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
+      if (hasTransform) {
+        // Pivot en el centro del frame de salida (width × height)
+        ctx.save();
+        ctx.translate(width / 2 + t.offsetX, height / 2 + t.offsetY);
+        if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
+        if (t.scale !== 1) ctx.scale(t.scale, t.scale);
+        ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, -width / 2, -height / 2, width, height);
+        ctx.restore();
+      } else {
+        // Reescalar al tamaño de salida
+        const srcW = img.naturalWidth;
+        const srcH = img.naturalHeight;
+        ctx.drawImage(img, 0, 0, srcW, srcH, 0, 0, width, height);
+      }
     }
   }
   ctx.globalAlpha = 1;
@@ -271,7 +284,21 @@ export async function exportWebM(
       const img = getCachedImage(cell.drawingId);
       if (img && img.complete && img.naturalWidth > 0) {
         ctx.globalAlpha = layer.opacity;
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const t = interpolateLayerTransform(layer, frame);
+        const hasTransform =
+          t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
+        if (hasTransform) {
+          const W = canvas.width;
+          const H = canvas.height;
+          ctx.save();
+          ctx.translate(W / 2 + t.offsetX, H / 2 + t.offsetY);
+          if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
+          if (t.scale !== 1) ctx.scale(t.scale, t.scale);
+          ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, -W / 2, -H / 2, W, H);
+          ctx.restore();
+        } else {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        }
       }
     }
     ctx.globalAlpha = 1;

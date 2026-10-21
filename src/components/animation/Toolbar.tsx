@@ -21,6 +21,7 @@ import {
   Pipette,
   Undo2,
   Redo2,
+  Layers,
 } from "lucide-react";
 
 interface ToolDef {
@@ -45,6 +46,7 @@ const TOOLS: ToolDef[] = [
   { id: "eyedropper", label: "Cuentagotas", icon: <Pipette size={16} />, shortcut: "I" },
   { id: "pan", label: "Mover lienzo", icon: <Hand size={16} />, shortcut: "H" },
   { id: "zoom", label: "Zoom", icon: <ZoomIn size={16} />, shortcut: "Z" },
+  { id: "move-layer", label: "Mover capa", icon: <Layers size={16} />, shortcut: "M" },
 ];
 
 export function Toolbar() {

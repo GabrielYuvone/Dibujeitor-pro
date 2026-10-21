@@ -139,6 +139,15 @@ interface AppState {
   duplicateLayer: (id: ID) => void;
   setLayerLoop: (id: ID, range: { start: number; end: number; count: number } | null) => void;
 
+  // Transform keyframes (animación de offset/scale/rotation por capa)
+  setLayerTransformAtFrame: (
+    layerId: ID,
+    frame: number,
+    transform: { offsetX: number; offsetY: number; scale: number; rotation: number }
+  ) => void;
+  removeLayerTransformKeyframe: (layerId: ID, frame: number) => void;
+  clearLayerTransformKeyframes: (layerId: ID) => void;
+
   // Cells / drawings
   ensureDrawingForCell: (layerId: ID, frame: number) => Promise<ID>;
   setCellDrawing: (layerId: ID, frame: number, drawingId: ID | null) => void;
@@ -554,17 +563,42 @@ export const useStore = create<AppState>((set, get) => ({
       const layer = p.layers.find((l) => l.id === id);
       if (!layer) return p;
       const newId = genId("layer");
+      // IMPORTANTE: duplicar también los Drawing de cada celda. Si no, las
+      // celdas de la nueva capa apuntan al mismo drawingId que las originales
+      // y cualquier edición en una capa se refleja en la otra (comparten el
+      // mismo bitmap subyacente). Duplicando los drawings garantizamos que
+      // la copia sea totalmente independiente.
+      const newDrawings = { ...p.drawings };
+      const newCells = layer.cells.map((c) => {
+        const newCellId = genId("cell");
+        if (!c.drawingId) {
+          return { ...c, id: newCellId };
+        }
+        const orig = p.drawings[c.drawingId];
+        if (!orig) {
+          return { ...c, id: newCellId };
+        }
+        const newDrawingId = genId("draw");
+        newDrawings[newDrawingId] = {
+          ...orig,
+          id: newDrawingId,
+          name: `${orig.name} (copia)`,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        return { ...c, id: newCellId, drawingId: newDrawingId };
+      });
       const newLayer: Layer = {
         ...layer,
         id: newId,
         name: `${layer.name} (copia)`,
-        cells: layer.cells.map((c) => ({ ...c, id: genId("cell") })),
+        cells: newCells,
         createdAt: Date.now(),
       };
       const idx = p.layers.findIndex((l) => l.id === id);
       const layers = [...p.layers];
       layers.splice(idx + 1, 0, newLayer);
-      return { ...p, layers, currentLayerId: newId };
+      return { ...p, layers, currentLayerId: newId, drawings: newDrawings };
     }));
   },
 
@@ -574,6 +608,55 @@ export const useStore = create<AppState>((set, get) => ({
     set(updateProject(state, (p) => ({
       ...p,
       layers: p.layers.map((l) => (l.id === id ? { ...l, loopRange: range } : l)),
+    })));
+  },
+
+  // -------------------------------------------------------------------------
+  // Transform keyframes de capa (offset/scale/rotation animados)
+  // -------------------------------------------------------------------------
+
+  setLayerTransformAtFrame: (layerId, frame, transform) => {
+    const state = get();
+    if (!state.project) return;
+    set(updateProject(state, (p) => ({
+      ...p,
+      layers: p.layers.map((l) => {
+        if (l.id !== layerId) return l;
+        const kfs = [...(l.transformKeyframes ?? [])];
+        const idx = kfs.findIndex((k) => k.frame === frame);
+        const newKf = { frame, ...transform };
+        if (idx >= 0) {
+          kfs[idx] = newKf;
+        } else {
+          kfs.push(newKf);
+          kfs.sort((a, b) => a.frame - b.frame);
+        }
+        return { ...l, transformKeyframes: kfs };
+      }),
+    })));
+  },
+
+  removeLayerTransformKeyframe: (layerId, frame) => {
+    const state = get();
+    if (!state.project) return;
+    set(updateProject(state, (p) => ({
+      ...p,
+      layers: p.layers.map((l) => {
+        if (l.id !== layerId) return l;
+        const kfs = (l.transformKeyframes ?? []).filter((k) => k.frame !== frame);
+        return { ...l, transformKeyframes: kfs };
+      }),
+    })));
+  },
+
+  clearLayerTransformKeyframes: (layerId) => {
+    const state = get();
+    if (!state.project) return;
+    set(updateProject(state, (p) => ({
+      ...p,
+      layers: p.layers.map((l) =>
+        l.id === layerId ? { ...l, transformKeyframes: [] } : l
+      ),
     })));
   },
 

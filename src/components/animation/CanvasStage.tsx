@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useCallback } from "react";
 import { useStore, getCurrentLayer } from "@/lib/animation/store";
 import { useDrawingEngine, getCachedImage, preloadImage } from "@/lib/animation/useDrawingEngine";
-import { findCellAtFrame } from "@/lib/animation/utils";
+import { findCellAtFrame, interpolateLayerTransform } from "@/lib/animation/utils";
 import { executeActions, evalCondition } from "@/lib/animation/actions";
 import { screenToCanvas } from "@/lib/animation/drawing";
 
@@ -169,8 +169,24 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
 
       const img = getCachedImage(cell.drawingId);
       if (img && img.complete && img.naturalWidth > 0) {
+        // Transform interpolado de la capa en el frame actual.
+        // Permite animar posición/escala/rotación de la capa con keyframes.
+        const t = interpolateLayerTransform(layer, project.currentFrame);
+        const hasTransform =
+          t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
         ctx.globalAlpha = layer.opacity;
-        ctx.drawImage(img, 0, 0, c.width, c.height);
+        if (hasTransform) {
+          // El pivot es el centro del canvas — el transform se aplica
+          // alrededor de ese punto, así un scale mantiene el centro.
+          ctx.save();
+          ctx.translate(c.width / 2 + t.offsetX, c.height / 2 + t.offsetY);
+          if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
+          if (t.scale !== 1) ctx.scale(t.scale, t.scale);
+          ctx.drawImage(img, -c.width / 2, -c.height / 2, c.width, c.height);
+          ctx.restore();
+        } else {
+          ctx.drawImage(img, 0, 0, c.width, c.height);
+        }
       }
     }
     ctx.globalAlpha = 1;

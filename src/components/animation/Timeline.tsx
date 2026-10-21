@@ -2,7 +2,7 @@
 
 import React, { useMemo, useRef, useEffect, useState } from "react";
 import { useStore, getOrderedLayers } from "@/lib/animation/store";
-import { findCellAtFrame, totalFrames, formatFrame } from "@/lib/animation/utils";
+import { findCellAtFrame, totalFrames, formatFrame, interpolateLayerTransform } from "@/lib/animation/utils";
 import { Button } from "@/components/ui/button";
 import {
   Play,
@@ -24,6 +24,9 @@ import {
   Music,
   Square as SquareIcon,
   Layers as LayersIcon,
+  Diamond,
+  Move,
+  RotateCcw,
 } from "lucide-react";
 import { genId } from "@/lib/animation/utils";
 
@@ -44,6 +47,9 @@ export function Timeline() {
   const addLayer = useStore((s) => s.addLayer);
   const deleteLayer = useStore((s) => s.deleteLayer);
   const duplicateLayer = useStore((s) => s.duplicateLayer);
+  const setLayerTransformAtFrame = useStore((s) => s.setLayerTransformAtFrame);
+  const removeLayerTransformKeyframe = useStore((s) => s.removeLayerTransformKeyframe);
+  const clearLayerTransformKeyframes = useStore((s) => s.clearLayerTransformKeyframes);
   const addMarker = useStore((s) => s.addMarker);
   const deleteMarker = useStore((s) => s.deleteMarker);
 
@@ -252,6 +258,53 @@ export function Timeline() {
           >
             <Trash2 size={14} />
           </Button>
+          {/* Separador */}
+          <div className="h-5 w-px bg-border mx-1" />
+          {/* Keyframe de transformación: captura la transformación actual
+              de la capa (offset/scale/rotation interpolados) en el frame
+              actual. Si ya existe un kf en este frame, lo actualiza. */}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-xs"
+            title="Agregar keyframe de transform en el frame actual (mover/escalar/rotar capa)"
+            disabled={!project.currentLayerId}
+            onClick={() => {
+              if (!project.currentLayerId) return;
+              const layer = project.layers.find((l) => l.id === project.currentLayerId);
+              if (!layer) return;
+              const t = interpolateLayerTransform(layer, project.currentFrame);
+              setLayerTransformAtFrame(project.currentLayerId, project.currentFrame, t);
+            }}
+          >
+            <Diamond size={12} /> Keyframe
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 w-7 p-0"
+            title="Quitar keyframe en el frame actual"
+            disabled={!project.currentLayerId}
+            onClick={() => {
+              if (!project.currentLayerId) return;
+              removeLayerTransformKeyframe(project.currentLayerId, project.currentFrame);
+            }}
+          >
+            <Diamond size={12} className="opacity-30" />
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 w-7 p-0"
+            title="Limpiar todos los keyframes de transform de la capa actual"
+            disabled={!project.currentLayerId}
+            onClick={() => {
+              if (!project.currentLayerId) return;
+              clearLayerTransformKeyframes(project.currentLayerId);
+            }}
+          >
+            <RotateCcw size={12} />
+          </Button>
         </div>
 
         <div className="h-5 w-px bg-border" />
@@ -447,6 +500,39 @@ export function Timeline() {
                     <AudioWaveform clipId={layer.audioClipId} />
                   </div>
                 )}
+
+                {/* Keyframes de transformación: diamantes amarillos en la
+                    parte superior de la fila. Click = ir al frame, click con
+                    Shift = borrar el keyframe. */}
+                {(layer.transformKeyframes ?? []).map((kf) => {
+                  const left = kf.frame * frameWidth;
+                  const isCurrent = kf.frame === project.currentFrame;
+                  return (
+                    <button
+                      key={`kf-${kf.frame}`}
+                      className="absolute top-0 z-10 flex items-center justify-center"
+                      style={{ left: left - 6, width: 14, height: 14 }}
+                      title={`KF frame ${kf.frame + 1}: offset(${Math.round(kf.offsetX)}, ${Math.round(kf.offsetY)}) scale(${kf.scale.toFixed(2)}) rot(${kf.rotation.toFixed(0)}°)`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (e.shiftKey) {
+                          removeLayerTransformKeyframe(layer.id, kf.frame);
+                        } else {
+                          gotoFrame(kf.frame);
+                        }
+                      }}
+                    >
+                      <Diamond
+                        size={10}
+                        className={
+                          isCurrent
+                            ? "fill-amber-500 text-amber-500"
+                            : "fill-amber-300/80 text-amber-500"
+                        }
+                      />
+                    </button>
+                  );
+                })}
               </div>
             ))}
           </div>
