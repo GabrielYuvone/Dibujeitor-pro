@@ -180,9 +180,10 @@ export function Toolbar() {
       </div>
       )}
 
-      {/* Tamaño: para todas las herramientas de trazo (no fill/selection/eyedropper/pan/zoom) */}
+      {/* Tamaño: para herramientas de trazo Y primitivas (línea, rect, elipse) */}
       {(currentTool === "pencil" || currentTool === "brush" || currentTool === "ink" ||
-        currentTool === "watercolor" || currentTool === "eraser") && (
+        currentTool === "watercolor" || currentTool === "eraser" ||
+        currentTool === "line" || currentTool === "rectangle" || currentTool === "ellipse") && (
       <div>
         <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex justify-between">
           <span>Tamaño</span>
@@ -200,9 +201,10 @@ export function Toolbar() {
       </div>
       )}
 
-      {/* Opacidad: para herramientas de trazo (no fill/selection) */}
+      {/* Opacidad: para herramientas de trazo Y primitivas */}
       {(currentTool === "pencil" || currentTool === "brush" || currentTool === "ink" ||
-        currentTool === "watercolor" || currentTool === "eraser") && (
+        currentTool === "watercolor" || currentTool === "eraser" ||
+        currentTool === "line" || currentTool === "rectangle" || currentTool === "ellipse") && (
       <div>
         <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex justify-between">
           <span>Opacidad</span>

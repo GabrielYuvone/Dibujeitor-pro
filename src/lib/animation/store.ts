@@ -662,25 +662,33 @@ export const useStore = create<AppState>((set, get) => ({
     }));
   },
 
-  extendCell: (layerId, frame, delta) => {
+  // Cambiar la duración de una celda específica por su ID
+  setCellDuration: (layerId, cellId, newDuration) => {
     const state = get();
     if (!state.project) return;
     set(updateProject(state, (p) => {
       const layers = p.layers.map((l) => {
         if (l.id !== layerId) return l;
-        const cells = [...l.cells];
-        const cell = cells.find(
-          (c) => frame >= c.startFrame && frame < c.startFrame + c.duration
+        const cells = l.cells.map((c) =>
+          c.id === cellId ? { ...c, duration: Math.max(1, newDuration) } : c
         );
-        if (cell) {
-          const idx = cells.indexOf(cell);
-          const newDuration = Math.max(1, cell.duration + delta);
-          cells[idx] = { ...cell, duration: newDuration };
-        }
         return { ...l, cells };
       });
       return { ...p, layers };
     }));
+  },
+
+  extendCell: (layerId, frame, delta) => {
+    const state = get();
+    if (!state.project) return;
+    const layer = state.project.layers.find((l) => l.id === layerId);
+    if (!layer) return;
+    const cell = layer.cells.find(
+      (c) => frame >= c.startFrame && frame < c.startFrame + c.duration
+    );
+    if (!cell) return;
+    const newDuration = Math.max(1, cell.duration + delta);
+    get().setCellDuration(layerId, cell.id, newDuration);
   },
 
   insertEmptyFrame: (layerId, frame) => {

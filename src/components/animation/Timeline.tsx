@@ -326,16 +326,15 @@ export function Timeline() {
                           e.stopPropagation();
                           const startX = e.clientX;
                           const startDuration = cell.duration;
-                          const startFrame = cell.startFrame;
+                          const cellId = cell.id;
                           const layerId = layer.id;
-                          const handle = e.currentTarget;
                           (e.target as HTMLElement).setPointerCapture(e.pointerId);
 
                           const onMove = (ev: PointerEvent) => {
                             const dx = ev.clientX - startX;
                             const framesDelta = Math.round(dx / frameWidth);
                             const newDuration = Math.max(1, startDuration + framesDelta);
-                            useStore.getState().extendCell(layerId, startFrame, newDuration - startDuration);
+                            useStore.getState().setCellDuration(layerId, cellId, newDuration);
                           };
                           const onUp = () => {
                             window.removeEventListener("pointermove", onMove);

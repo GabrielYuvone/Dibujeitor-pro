@@ -132,6 +132,10 @@ export function useDrawingEngine({
   // Refs para selección (definidos al inicio del hook)
   const selectionBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const selectionImageRef = useRef<ImageData | null>(null);
+  // Refs para el modo "paste flotante": la selección pegada se puede mover
+  const pastedImageRef = useRef<ImageData | null>(null);
+  const pastedPosRef = useRef<{ x: number; y: number } | null>(null);
+  const pastedOffsetRef = useRef<{ x: number; y: number } | null>(null);
 
   // Listener para los modificadores X (eraser), C (pan), Ctrl (brush resize) y Z (zoom)
   useEffect(() => {
@@ -424,15 +428,28 @@ export function useDrawingEngine({
       }
 
       // --- Herramientas que requieren un drawing activo ---
-      // Para herramientas que sólo necesitan "leer" (selection, transform),
+      // Transform: si hay una imagen pegada flotando, la puede mover arrastrando
+      if (tool === "transform" && pastedImageRef.current) {
+        const pt = getCanvasPoint(e.clientX, e.clientY);
+        if (!pt) return;
+        isPanningRef.current = false;
+        isDrawingRef.current = false;
+        // Iniciar modo "mover paste flotante"
+        pastedOffsetRef.current = {
+          x: pt.x - (pastedPosRef.current?.x ?? 0),
+          y: pt.y - (pastedPosRef.current?.y ?? 0),
+        };
+        return;
+      }
+
+      // Para herramientas que sólo necesitan "leer" (selection, transform sin paste)
       // no creamos un drawing nuevo automáticamente
       if (tool === "selection" || tool === "transform") {
         const pt = getCanvasPoint(e.clientX, e.clientY);
         if (!pt) return;
-        // RESETEAR smoother y lastPos para evitar "raya" del trazo anterior
         smootherRef.current = createSmoother(activeBrushRef.current.smoothing);
         startPosRef.current = pt;
-        lastPosRef.current = pt; // IMPORTANTE: necesario para que handleUp calcule bounds
+        lastPosRef.current = pt;
         isDrawingRef.current = true;
         useStore.setState({ isDrawing: true });
         return;
@@ -598,6 +615,38 @@ export function useDrawingEngine({
 
   const handleMove = useCallback(
     (e: PointerEvent) => {
+      // Mover imagen pegada flotante (modo transform)
+      if (pastedImageRef.current && pastedOffsetRef.current && pastedPosRef.current) {
+        const pt = getCanvasPoint(e.clientX, e.clientY);
+        if (pt) {
+          pastedPosRef.current = {
+            x: pt.x - pastedOffsetRef.current.x,
+            y: pt.y - pastedOffsetRef.current.y,
+          };
+          // Redibujar overlay con la imagen en la nueva posición
+          const overlay = overlayCanvasRef.current;
+          if (overlay) {
+            const octx = overlay.getContext("2d");
+            if (octx) {
+              octx.clearRect(0, 0, overlay.width, overlay.height);
+              const sel = pastedImageRef.current;
+              const pos = pastedPosRef.current;
+              const tmpCanvas = document.createElement("canvas");
+              tmpCanvas.width = sel.width;
+              tmpCanvas.height = sel.height;
+              const tmpCtx = tmpCanvas.getContext("2d")!;
+              tmpCtx.putImageData(sel, 0, 0);
+              octx.drawImage(tmpCanvas, pos.x, pos.y);
+              octx.strokeStyle = "#4dabf7";
+              octx.lineWidth = 1;
+              octx.setLineDash([4, 4]);
+              octx.strokeRect(pos.x, pos.y, sel.width, sel.height);
+              octx.setLineDash([]);
+            }
+          }
+        }
+        return;
+      }
       // Zoom por arrastre (modificador Z apretado + drag)
       // dy < 0 (arrastra hacia arriba) → zoom in
       // dy > 0 (arrastra hacia abajo) → zoom out
@@ -781,6 +830,11 @@ export function useDrawingEngine({
 
   const handleUp = useCallback(
     async (e: PointerEvent) => {
+      // Fin de mover imagen pegada flotante (solo limpiar offset, la imagen queda flotando)
+      if (pastedOffsetRef.current) {
+        pastedOffsetRef.current = null;
+        return;
+      }
       // Zoom por arrastre fin
       if (isZoomingRef.current) {
         isZoomingRef.current = false;
@@ -914,7 +968,7 @@ export function useDrawingEngine({
   }, [drawingCanvasRef, overlayCanvasRef, commitDrawing]);
 
   // ---------------------------------------------------------------------------
-  // Atajos de teclado para selección (Ctrl+V, Delete, Escape)
+  // Atajos de teclado para selección (Ctrl+C, Ctrl+X, Ctrl+V, Shift+Ctrl+V)
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
@@ -923,25 +977,8 @@ export function useDrawingEngine({
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
         return;
       }
-      // Ctrl/Cmd + C = copiar selección (sin borrar)
+      // Ctrl+C = copiar SOLO la figura (píxeles no transparentes del área)
       if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
-        if (selectionBoundsRef.current && selectionImageRef.current) return;
-        e.preventDefault();
-        const canvas = drawingCanvasRef.current;
-        const bounds = selectionBoundsRef.current;
-        if (canvas && bounds) {
-          const ctx = canvas.getContext("2d");
-          if (ctx) {
-            try {
-              selectionImageRef.current = ctx.getImageData(bounds.x, bounds.y, bounds.width, bounds.height);
-            } catch (_) {}
-          }
-        }
-        return;
-      }
-      // Ctrl/Cmd + X = cortar selección (copiar + borrar)
-      if ((e.ctrlKey || e.metaKey) && (e.key === "x" || e.key === "X")) {
-        // No confundir con el modificador X para goma
         if (selectionBoundsRef.current) {
           e.preventDefault();
           const canvas = drawingCanvasRef.current;
@@ -950,7 +987,37 @@ export function useDrawingEngine({
             const ctx = canvas.getContext("2d");
             if (ctx) {
               try {
-                selectionImageRef.current = ctx.getImageData(bounds.x, bounds.y, bounds.width, bounds.height);
+                const imgData = ctx.getImageData(bounds.x, bounds.y, bounds.width, bounds.height);
+                // Hacer transparentes los píxeles del fondo (alpha = 0)
+                // para que solo se copie la figura
+                for (let i = 3; i < imgData.data.length; i += 4) {
+                  // Si el alpha es muy bajo, considerarlo transparente
+                  if (imgData.data[i] < 10) {
+                    imgData.data[i] = 0;
+                  }
+                }
+                selectionImageRef.current = imgData;
+              } catch (_) {}
+            }
+          }
+        }
+        return;
+      }
+      // Ctrl+X = cortar (copiar figura + borrarla del canvas)
+      if ((e.ctrlKey || e.metaKey) && (e.key === "x" || e.key === "X")) {
+        if (selectionBoundsRef.current) {
+          e.preventDefault();
+          const canvas = drawingCanvasRef.current;
+          const bounds = selectionBoundsRef.current;
+          if (canvas && bounds) {
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              try {
+                const imgData = ctx.getImageData(bounds.x, bounds.y, bounds.width, bounds.height);
+                for (let i = 3; i < imgData.data.length; i += 4) {
+                  if (imgData.data[i] < 10) imgData.data[i] = 0;
+                }
+                selectionImageRef.current = imgData;
                 ctx.clearRect(bounds.x, bounds.y, bounds.width, bounds.height);
                 await commitDrawing();
               } catch (_) {}
@@ -959,73 +1026,144 @@ export function useDrawingEngine({
           return;
         }
       }
-      // Ctrl/Cmd + V = pegar selección (en el lugar original)
+      // Ctrl+V = pegar como imagen flotante (se puede mover y pegar varias veces)
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "v" || e.key === "V")) {
-        if (selectionImageRef.current && selectionBoundsRef.current) {
+        if (selectionImageRef.current) {
           e.preventDefault();
-          const canvas = drawingCanvasRef.current;
           const sel = selectionImageRef.current;
           const bounds = selectionBoundsRef.current;
-          if (canvas && sel && bounds) {
-            const ctx = canvas.getContext("2d");
-            if (ctx) {
-              ctx.putImageData(sel, bounds.x, bounds.y);
-              await commitDrawing();
-              const overlay = overlayCanvasRef.current;
-              if (overlay) {
-                const octx = overlay.getContext("2d");
-                octx?.clearRect(0, 0, overlay.width, overlay.height);
-              }
-              selectionBoundsRef.current = null;
-              selectionImageRef.current = null;
+          // Si ya hay una imagen pegada flotando, commitarla primero
+          if (pastedImageRef.current) {
+            await commitDrawing();
+          }
+          // Iniciar modo paste flotante
+          pastedImageRef.current = sel;
+          pastedPosRef.current = bounds
+            ? { x: bounds.x, y: bounds.y }
+            : { x: 0, y: 0 };
+          // Dibujar la imagen pegada en el overlay para preview flotante
+          const overlay = overlayCanvasRef.current;
+          const canvas = drawingCanvasRef.current;
+          if (overlay && canvas) {
+            const octx = overlay.getContext("2d");
+            if (octx) {
+              octx.clearRect(0, 0, overlay.width, overlay.height);
+              // Crear canvas temporal para dibujar solo píxeles no transparentes
+              const tmpCanvas = document.createElement("canvas");
+              tmpCanvas.width = sel.width;
+              tmpCanvas.height = sel.height;
+              const tmpCtx = tmpCanvas.getContext("2d")!;
+              tmpCtx.putImageData(sel, 0, 0);
+              octx.drawImage(tmpCanvas, pastedPosRef.current.x, pastedPosRef.current.y);
+              // Bounding box
+              octx.strokeStyle = "#4dabf7";
+              octx.lineWidth = 1;
+              octx.setLineDash([4, 4]);
+              octx.strokeRect(pastedPosRef.current.x, pastedPosRef.current.y, sel.width, sel.height);
+              octx.setLineDash([]);
+              octx.fillStyle = "rgba(77,171,247,0.9)";
+              octx.font = "11px sans-serif";
+              octx.textAlign = "left";
+              octx.textBaseline = "top";
+              octx.fillText("Arrastrá para mover · Enter para confirmar · Esc cancelar", pastedPosRef.current.x, pastedPosRef.current.y - 14);
             }
           }
           return;
         }
       }
-      // Shift + Ctrl/Cmd + V = pegar en la posición del cursor (no implementado aún,
-      // pero prevenimos el default)
+      // Shift+Ctrl+V = pegar en el centro
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "v" || e.key === "V")) {
         e.preventDefault();
-        // Por ahora hace lo mismo que Ctrl+V normal
-        if (selectionImageRef.current && selectionBoundsRef.current) {
+        if (selectionImageRef.current) {
           const canvas = drawingCanvasRef.current;
           const sel = selectionImageRef.current;
-          const bounds = selectionBoundsRef.current;
-          if (canvas && sel && bounds) {
+          if (canvas) {
             const ctx = canvas.getContext("2d");
             if (ctx) {
-              ctx.putImageData(sel, bounds.x, bounds.y);
-              await commitDrawing();
+              if (pastedImageRef.current) await commitDrawing();
+              const cx = Math.round((canvas.width - sel.width) / 2);
+              const cy = Math.round((canvas.height - sel.height) / 2);
+              pastedImageRef.current = sel;
+              pastedPosRef.current = { x: cx, y: cy };
               const overlay = overlayCanvasRef.current;
               if (overlay) {
                 const octx = overlay.getContext("2d");
-                octx?.clearRect(0, 0, overlay.width, overlay.height);
+                if (octx) {
+                  octx.clearRect(0, 0, overlay.width, overlay.height);
+                  const tmpCanvas = document.createElement("canvas");
+                  tmpCanvas.width = sel.width;
+                  tmpCanvas.height = sel.height;
+                  const tmpCtx = tmpCanvas.getContext("2d")!;
+                  tmpCtx.putImageData(sel, 0, 0);
+                  octx.drawImage(tmpCanvas, cx, cy);
+                  octx.strokeStyle = "#4dabf7";
+                  octx.lineWidth = 1;
+                  octx.setLineDash([4, 4]);
+                  octx.strokeRect(cx, cy, sel.width, sel.height);
+                  octx.setLineDash([]);
+                }
               }
-              selectionBoundsRef.current = null;
-              selectionImageRef.current = null;
             }
           }
         }
         return;
       }
+      // Enter = confirmar paste flotante (pega al canvas)
+      if (e.key === "Enter" && pastedImageRef.current) {
+        e.preventDefault();
+        const canvas = drawingCanvasRef.current;
+        const sel = pastedImageRef.current;
+        const pos = pastedPosRef.current;
+        if (canvas && sel && pos) {
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            // Crear canvas temporal y usar drawImage (respeta alpha)
+            const tmpCanvas = document.createElement("canvas");
+            tmpCanvas.width = sel.width;
+            tmpCanvas.height = sel.height;
+            const tmpCtx = tmpCanvas.getContext("2d")!;
+            tmpCtx.putImageData(sel, 0, 0);
+            ctx.drawImage(tmpCanvas, pos.x, pos.y);
+            await commitDrawing();
+          }
+        }
+        pastedImageRef.current = null;
+        pastedPosRef.current = null;
+        const overlay = overlayCanvasRef.current;
+        if (overlay) {
+          const octx = overlay.getContext("2d");
+          octx?.clearRect(0, 0, overlay.width, overlay.height);
+        }
+        return;
+      }
       // Delete o Backspace = limpiar selección
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (selectionBoundsRef.current) {
+        if (pastedImageRef.current) {
+          e.preventDefault();
+          pastedImageRef.current = null;
+          pastedPosRef.current = null;
+          const overlay = overlayCanvasRef.current;
+          if (overlay) {
+            const octx = overlay.getContext("2d");
+            octx?.clearRect(0, 0, overlay.width, overlay.height);
+          }
+        } else if (selectionBoundsRef.current) {
           e.preventDefault();
           clearSelection();
         }
         return;
       }
-      // Escape = limpiar selección
+      // Escape = limpiar todo
       if (e.key === "Escape") {
+        pastedImageRef.current = null;
+        pastedPosRef.current = null;
         clearSelection();
         return;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [pasteSelection, clearSelection, commitDrawing]);
+  }, [clearSelection, commitDrawing]);
 
   // ---------------------------------------------------------------------------
   // Window listeners para move/up (bulletproof — no dependen de React)
