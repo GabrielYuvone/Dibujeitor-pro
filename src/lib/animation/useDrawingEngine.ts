@@ -1452,6 +1452,35 @@ export function useDrawingEngine({
     return () => clearInterval(interval);
   }, [commitDrawing]);
 
+  // Reset de todos los modifiers (Z/X/C/Ctrl/Space + brush resize + move-layer).
+  // Útil para forzar limpieza del estado del engine cuando el usuario sale de
+  // un flujo que pudo dejar modifiers "pegados" — ej. confirmar imagen
+  // pegada con Ctrl+V puede dejar ctrlModifier=true si el keyup de "control"
+  // se perdió (focus cambió, etc.). Sin esto, el siguiente click del usuario
+  // entraría en modo "resize brush" en vez de dibujar.
+  const resetModifiers = useCallback(() => {
+    zModifierRef.current = false;
+    xModifierRef.current = false;
+    cModifierRef.current = false;
+    ctrlModifierRef.current = false;
+    spaceModifierRef.current = false;
+    spaceKeyDownTimeRef.current = 0;
+    spaceDragHappenedRef.current = false;
+    isResizingBrushRef.current = false;
+    brushResizeStartRef.current = null;
+    isMovingLayerRef.current = false;
+    moveLayerStartRef.current = null;
+    isPanningRef.current = false;
+    panStartRef.current = null;
+    isZoomingRef.current = false;
+    zoomStartRef.current = null;
+    useStore.setState({
+      zModifier: false,
+      xModifier: false,
+      spaceModifier: false,
+    });
+  }, []);
+
   return {
     handlePointerDown,
     handleWheel,
@@ -1461,6 +1490,7 @@ export function useDrawingEngine({
     selectionImageRef,
     clearSelection,
     pasteSelection,
+    resetModifiers,
   };
 }
 

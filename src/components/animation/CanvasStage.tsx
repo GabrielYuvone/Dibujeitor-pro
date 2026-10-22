@@ -464,14 +464,21 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
       if (e.key === "Enter") {
         e.preventDefault();
         confirmImagePlacement();
+        // Forzar reset de modifiers del engine. Después de Ctrl+V el
+        // usuario puede tener ctrlModifier=true sin haber soltado Ctrl
+        // explícitamente (ej. si el keyup se perdió al cambiar focus).
+        // Sin esto, el siguiente click entraba en modo "resize brush"
+        // en vez de dibujar.
+        engine.resetModifiers();
       } else if (e.key === "Escape") {
         e.preventDefault();
         cancelImagePlacement();
+        engine.resetModifiers();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [imagePlacement, confirmImagePlacement, cancelImagePlacement]);
+  }, [imagePlacement, confirmImagePlacement, cancelImagePlacement, engine]);
 
   // ---------------------------------------------------------------------------
   // Efecto: ajustar tamaños de canvas
