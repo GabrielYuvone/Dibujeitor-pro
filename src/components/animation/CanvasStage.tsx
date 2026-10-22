@@ -650,11 +650,15 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
       if (!rect) return;
       el.style.left = `${e.clientX - rect.left}px`;
       el.style.top = `${e.clientY - rect.top}px`;
-      // Si está dibujando, ocultar completamente el cursor
-      if (isPointerDownRef.current) {
-        el.style.opacity = "0";
+      // Si está dibujando, normalmente ocultamos el cursor. PERO si Ctrl
+      // está apretado (modo resize brush), lo mantenemos visible para
+      // que el usuario vea cómo cambia el tamaño del trazo en tiempo real.
+      if (isPointerDownRef.current && !e.ctrlKey && !e.metaKey) {
+        el.style.opacity = "0";   // dibujando normal → ocultar
+      } else if (isPointerDownRef.current && (e.ctrlKey || e.metaKey)) {
+        el.style.opacity = "1";   // resize brush → bien visible
       } else {
-        el.style.opacity = "0.8";
+        el.style.opacity = "0.8"; // hover normal
       }
     };
     window.addEventListener("pointerup", onUp);
