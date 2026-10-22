@@ -473,7 +473,10 @@ export const useStore = create<AppState>((set, get) => ({
     a.href = url;
     // Sanitizar el nombre del archivo: solo alfanum, guiones, guion bajo.
     const safeName = project.name.replace(/[^a-zA-Z0-9_-]/g, "_") || "proyecto";
-    a.download = `${safeName}.dibujeitor.json`;
+    // Extensión .dibu (más corta y mnemónica que .dibujeitor.json). El
+    // contenido sigue siendo JSON, pero el SO reconoce el archivo como
+    // proyecto de Dibujeitor por la extensión.
+    a.download = `${safeName}.dibu`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

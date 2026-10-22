@@ -233,19 +233,20 @@ export function EditorView() {
               <Save className="mr-2" size={14} /> Guardar
             </MenubarItem>
             {/* Guardar proyecto como archivo en la PC del usuario.
-                El archivo .dibujeitor.json contiene TODO el proyecto
-                (capas, frames, drawings como dataUrl, audioClips, etc.)
-                y se puede compartir con otros usuarios. */}
+                El archivo .dibu contiene TODO el proyecto (capas, frames,
+                drawings como dataUrl, audioClips, etc.) y se puede compartir
+                con otros usuarios. El contenido es JSON con la extensión
+                .dibu para que el SO lo reconozca como proyecto. */}
             <MenubarItem onClick={() => useStore.getState().saveProjectToFile()}>
               <Folder className="mr-2" size={14} /> Guardar como archivo…
-              <span className="ml-auto text-[10px] opacity-60">.json</span>
+              <span className="ml-auto text-[10px] opacity-60">.dibu</span>
             </MenubarItem>
-            {/* Abrir proyecto desde un archivo .dibujeitor.json. Regenera
-                el ID para no colisionar con proyectos existentes en la
-                IndexedDB local del usuario. */}
+            {/* Abrir proyecto desde un archivo .dibu (o .json legacy).
+                Regenera el ID para no colisionar con proyectos existentes
+                en la IndexedDB local del usuario. */}
             <MenubarItem onClick={() => fileInputRef.current?.click()}>
               <FolderOpen className="mr-2" size={14} /> Abrir desde archivo…
-              <span className="ml-auto text-[10px] opacity-60">.json</span>
+              <span className="ml-auto text-[10px] opacity-60">.dibu</span>
             </MenubarItem>
             <MenubarSeparator />
             <MenubarItem onClick={() => setExportOpen(true)}>
@@ -436,7 +437,7 @@ export function EditorView() {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".json,.dibujeitor.json,application/json"
+        accept=".dibu,.json,.dibujeitor.json,application/json"
         style={{ display: "none" }}
         onChange={async (e) => {
           const file = e.target.files?.[0];
