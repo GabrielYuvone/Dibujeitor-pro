@@ -228,54 +228,24 @@ export async function exportMp4(
   const start = Math.max(0, options.rangeStart);
   const end = Math.min(options.rangeEnd, totalFrames(project.layers));
   const total = end - start;
-  // Cantidad de veces que se repite la animación en el export. 1 = una
-  // sola vez (default). Si el usuario pidió 3 loops, renderizamos la
-  // animación 3 veces seguidas en el video de salida.
   const loopCount = Math.max(1, options.loopCount ?? 1);
   const totalToRender = total * loopCount;
   console.log(`[MP4] Exportando ${total} frames × ${loopCount} loops = ${totalToRender} frames totales (${start}-${end-1}) a ${options.width}x${options.height} @ ${options.fps}fps`);
 
-  // Safety check: si no hay frames para renderizar, tirar error claro
-  // en vez de producir un video vacío.
+  // Safety check
   if (totalToRender <= 0) {
     throw new Error("No hay frames para exportar. Verificá que el proyecto tenga al menos un frame y que el rango de export sea válido.");
   }
 
-  // PRE-EXPORT CLEANUP: eliminar frames viejos del FS virtual de ffmpeg
-  // que pudieron quedar de exports anteriores. Si un export anterior
-  // tuvo más frames que el actual, esos frames viejos se quedarían en
-  // el FS y ffmpeg los leería junto con los nuevos, produciendo un video
-  // con frames mezclados (ej: 10 nuevos + 20 viejos = 30 frames, donde
-  // los últimos 20 son basura). Esto causa el bug "el video abre pero
-  // vacío".
-  try {
-    // Brute-force: borrar frame_00000 a frame_00999 (suficiente para
-    // la mayoría de los proyectos; si hay más, el loop de render los
-    // sobrescribe igual).
-    for (let i = 0; i < 1000; i++) {
-      const fname = `frame_${i.toString().padStart(5, "0")}.png`;
-      try {
-        await ff.deleteFile(fname);
-      } catch (_) {
-        // El archivo no existe — está bien, seguir
-      }
-    }
-    // También borrar output.mp4 viejo si existe
-    try {
-      await ff.deleteFile("output.mp4");
-    } catch (_) {}
-    // Y archivos de audio viejos
-    try {
-      await ff.deleteFile("audio.mp3");
-    } catch (_) {}
-    try {
-      await ff.deleteFile("audio.wav");
-    } catch (_) {}
-  } catch (_) {}
+  // Prefijo único para los frames de este export. Así no interferimos con
+  // frames de exports anteriores que pudieron quedar en el FS virtual de
+  // ffmpeg (que es persistente entre exports). Antes hacíamos brute-force
+  // delete de 1000 archivos, pero eso parece romper el FS → 0 bytes.
+  const framePrefix = `f${Date.now().toString(36)}_`;
+  const framePattern = `${framePrefix}%05d.png`;
+  const outName = `${framePrefix}output.mp4`;
 
   // 1. Renderizar frames a PNG y escribirlos en el FS virtual de ffmpeg.
-  // El outer loop repite la animación loopCount veces; el frame dentro de
-  // cada loop se calcula con % total.
   for (let i = 0; i < totalToRender; i++) {
     const frame = start + (i % total);
     try {
@@ -286,11 +256,15 @@ export async function exportMp4(
         options.height,
         options.backgroundColor
       );
-      const fname = `frame_${i.toString().padStart(5, "0")}.png`;
+      // Safety check: si el blob es null o 0 bytes, el canvas.toBlob falló
+      // (probablemente canvas demasiado grande). Tirar error claro.
+      if (!blob || blob.size === 0) {
+        throw new Error(`Frame ${i} produjo un blob vacío (canvas.toBlob falló). El canvas podría ser demasiado grande.`);
+      }
+      const fname = `${framePrefix}${i.toString().padStart(5, "0")}.png`;
       const data = await fetchFile(blob);
       await ff.writeFile(fname, data);
       onProgress?.(i / totalToRender, "rendering");
-      // Ceder al hilo para no congelar la UI
       await new Promise((r) => setTimeout(r, 0));
     } catch (e) {
       console.error(`[MP4] Error en frame ${i}:`, e);
@@ -322,10 +296,9 @@ export async function exportMp4(
   });
 
   // 4. Ejecutar ffmpeg
-  const outName = "output.mp4";
   const args: string[] = [
     "-framerate", String(options.fps),
-    "-i", "frame_%05d.png",
+    "-i", framePattern,
   ];
   if (audioName) {
     args.push("-i", audioName);
@@ -338,7 +311,6 @@ export async function exportMp4(
   );
   if (audioName) {
     args.push("-c:a", "aac", "-b:a", "128k");
-    // Sincronizar audio: si empieza más tarde, retrasar con -itsoffset
     if (audioStartOffset > 0) {
       args.push("-itsoffset", audioStartOffset.toFixed(3));
     }
@@ -370,15 +342,14 @@ export async function exportMp4(
   }
   const blob = new Blob([data as BlobPart], { type: "video/mp4" });
 
-  // 6. Limpieza del FS virtual — borrar TODOS los frames que escribimos
-  // (totalToRender, no total — si no, los del loopCount > 1 se quedan).
+  // 6. Limpieza del FS virtual — borrar los frames de este export.
   try {
     for (let i = 0; i < totalToRender; i++) {
-      const fname = `frame_${i.toString().padStart(5, "0")}.png`;
-      await ff.deleteFile(fname);
+      const fname = `${framePrefix}${i.toString().padStart(5, "0")}.png`;
+      try { await ff.deleteFile(fname); } catch (_) {}
     }
-    if (audioName) await ff.deleteFile(audioName);
-    await ff.deleteFile(outName);
+    if (audioName) { try { await ff.deleteFile(audioName); } catch (_) {} }
+    try { await ff.deleteFile(outName); } catch (_) {}
   } catch (_) {}
 
   return blob;
