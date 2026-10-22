@@ -140,7 +140,12 @@ export function Timeline() {
   return (
     <div className="flex flex-col h-full bg-card border-t border-border">
       {/* Barra superior: controles de reproducción */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/30">
+      {/* Barra de controles — flex-wrap para que en monitores angostos
+          las secciones bajen a la línea siguiente en vez de cortarse
+          (issue reportado: cosas del centro se pierden). Cada "grupo"
+          (Playback, Frames, Capas, Keyframes, Velocidad) tiene gap-1
+          interno para que se mantenga junto al hacer wrap. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1.5 border-b border-border bg-muted/30">
         <div className="flex items-center gap-1">
           <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => gotoFrame(0)} title="Ir al inicio">
             <SkipBack size={14} />
