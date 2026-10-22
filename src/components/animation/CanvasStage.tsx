@@ -43,6 +43,12 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   const brush = useStore((s) => s.brush);
   const currentTool = useStore((s) => s.currentTool);
   const xModifier = useStore((s) => s.xModifier);
+  // spaceModifier: cuando está apretado el espacio, el engine entra en
+  // modo "move-layer temporal". Necesitamos compositar la capa activa con
+  // su transform aplicado para que el usuario vea el desplazamiento en
+  // tiempo real durante el drag (igual que cuando el tool activo es
+  // "move-layer" propiamente dicho).
+  const spaceModifier = useStore((s) => s.spaceModifier);
   const isDrawing = useStore((s) => s.isDrawing);
 
   const drawingCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -75,7 +81,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   // la capa activa (con su transform) y ocultamos el drawingCanvas. Si no,
   // el usuario vería la capa estática en (0,0) en el drawingCanvas y no
   // notaría el desplazamiento durante el drag (solo lo vería al hacer play).
-  const isCompositing = viewMode === "preview" || playback.playing || currentTool === "move-layer";
+  const isCompositing = viewMode === "preview" || playback.playing || currentTool === "move-layer" || spaceModifier;
 
   // ---------------------------------------------------------------------------
   // Pintar fondo
@@ -151,11 +157,12 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
 
     // En edit mode (sin playback), la capa activa se muestra en el drawing
     // canvas (arriba). La excluimos del composited para no duplicar.
-    // PERO si el tool activo es "move-layer", queremos ver la capa activa
-    // compositada CON su transform — excluirla significaría no ver el
-    // desplazamiento en tiempo real durante el drag.
+    // PERO si el tool activo es "move-layer" O el espacio está apretado
+    // (modo "move-layer temporal"), queremos ver la capa activa compositada
+    // CON su transform — excluirla significaría no ver el desplazamiento
+    // en tiempo real durante el drag.
     const excludeActiveLayer =
-      viewMode === "edit" && !playback.playing && currentTool !== "move-layer";
+      viewMode === "edit" && !playback.playing && currentTool !== "move-layer" && !spaceModifier;
     const activeLayerId = project.currentLayerId;
 
     // Onion skin primero (debajo de las capas reales) — solo en edit mode
@@ -216,7 +223,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
         ctx.fillText(btn.label, btn.x + btn.width / 2, btn.y + btn.height / 2);
       }
     }
-  }, [project, onion, viewMode, playback.playing, currentTool]);
+  }, [project, onion, viewMode, playback.playing, currentTool, spaceModifier]);
 
   // ---------------------------------------------------------------------------
   // Dibujar overlay del placement de imagen (modo transformación)

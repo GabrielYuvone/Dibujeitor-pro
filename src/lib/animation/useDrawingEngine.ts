@@ -187,6 +187,7 @@ export function useDrawingEngine({
         // Si ya está apretado (auto-repeat del teclado), no re-setear.
         if (spaceModifierRef.current) return;
         spaceModifierRef.current = true;
+        useStore.setState({ spaceModifier: true });
         spaceKeyDownTimeRef.current = Date.now();
         spaceDragHappenedRef.current = false;
       }
@@ -227,6 +228,7 @@ export function useDrawingEngine({
         const duration = Date.now() - spaceKeyDownTimeRef.current;
         const wasTap = !spaceDragHappenedRef.current && duration < 500;
         spaceModifierRef.current = false;
+        useStore.setState({ spaceModifier: false });
         spaceKeyDownTimeRef.current = 0;
         spaceDragHappenedRef.current = false;
         // Si estábamos moviendo una capa al soltar space, terminar el drag
@@ -250,7 +252,7 @@ export function useDrawingEngine({
       spaceModifierRef.current = false;
       spaceKeyDownTimeRef.current = 0;
       spaceDragHappenedRef.current = false;
-      useStore.setState({ zModifier: false, xModifier: false });
+      useStore.setState({ zModifier: false, xModifier: false, spaceModifier: false });
     });
     return () => {
       window.removeEventListener("keydown", onDown);

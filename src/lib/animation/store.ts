@@ -70,6 +70,7 @@ interface AppState {
   rightPanelVisible: boolean;
   xModifier: boolean;
   zModifier: boolean;
+  spaceModifier: boolean;
   toolSettings: Record<string, Partial<BrushSettings>>;
   customPalette: string[];
 
@@ -319,6 +320,7 @@ export const useStore = create<AppState>((set, get) => ({
   rightPanelVisible: true,
   xModifier: false,
   zModifier: false,
+  spaceModifier: false,
   toolSettings: {} as Record<string, Partial<BrushSettings>>,
   customPalette: [] as string[],
   // Pilas de undo/redo (no persistidas)
