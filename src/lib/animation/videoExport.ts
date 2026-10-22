@@ -99,29 +99,6 @@ async function getFFmpeg(): Promise<FFmpeg> {
 // Renderizar un frame a un canvas offscreen y devolver un Blob PNG
 // ---------------------------------------------------------------------------
 
-/**
- * Calcula las dimensiones máximas de bitmap a través de todos los
- * drawings del proyecto. El export canvas debe ser al menos tan grande
- * como el drawing más grande, para no cortar contenido que el usuario
- * dibujó más allá de project.settings (bitmap expandido).
- */
-function getMaxDrawingDimensions(project: AnimationProject): { width: number; height: number } {
-  let maxW = 0;
-  let maxH = 0;
-  for (const layer of project.layers) {
-    if (layer.type === "audio") continue;
-    for (const cell of layer.cells) {
-      if (!cell.drawingId) continue;
-      const d = project.drawings[cell.drawingId];
-      if (d) {
-        if (d.width > maxW) maxW = d.width;
-        if (d.height > maxH) maxH = d.height;
-      }
-    }
-  }
-  return { width: maxW, height: maxH };
-}
-
 async function renderFrameToBlob(
   project: AnimationProject,
   frame: number,
@@ -139,22 +116,14 @@ async function renderFrameToBlob(
     }
   }
 
-  // Si algún drawing es más grande que el tamaño de export pedido (bitmap
-  // expandido), ampliamos el canvas para que entre todo. Sin esto, el
-  // contenido expandido se corta y queda blanco (bgColor) donde el
-  // bitmap no llega.
-  const maxDims = getMaxDrawingDimensions(project);
-  const cw = Math.max(width, maxDims.width);
-  const ch = Math.max(height, maxDims.height);
-
   const canvas = document.createElement("canvas");
-  canvas.width = cw;
-  canvas.height = ch;
+  canvas.width = width;
+  canvas.height = height;
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
 
   // Fondo
   ctx.fillStyle = bgColor;
-  ctx.fillRect(0, 0, cw, ch);
+  ctx.fillRect(0, 0, width, height);
 
   // Componer capas
   for (const layer of project.layers) {
@@ -169,12 +138,11 @@ async function renderFrameToBlob(
       const t = interpolateLayerTransform(layer, frame);
       const hasTransform =
         t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
-      // Dibujar a tamaño NATURAL del drawing (no estirado a cw×ch) para
-      // respetar el bitmap expandido. Se posiciona según el transform
-      // interpolado de la capa.
+      // Dibujar a tamaño NATURAL del drawing (no estirado a width×height).
+      // Si el bitmap es más grande que el canvas (expandido), se clipa
+      // automáticamente — solo se ve la parte que entra en el canvas.
+      // Si es igual al canvas, entra perfecto sin deformación.
       if (hasTransform) {
-        // Pivot en el centro del bitmap (no del canvas de export) —
-        // coincide con el transform-origin "50% 50%" del drawingCanvas.
         ctx.save();
         ctx.translate(t.offsetX, t.offsetY);
         ctx.translate(drawing.width / 2, drawing.height / 2);
@@ -364,13 +332,9 @@ export async function exportWebM(
   options: ExportOptions,
   onProgress?: (p: number) => void
 ): Promise<Blob> {
-  // Ampliar el canvas si algún drawing es más grande que options.width/height
-  const maxDims = getMaxDrawingDimensions(project);
-  const cw = Math.max(options.width, maxDims.width);
-  const ch = Math.max(options.height, maxDims.height);
   const canvas = document.createElement("canvas");
-  canvas.width = cw;
-  canvas.height = ch;
+  canvas.width = options.width;
+  canvas.height = options.height;
   const ctx = canvas.getContext("2d")!;
 
   const stream = canvas.captureStream(0); // 0 = manual frames
