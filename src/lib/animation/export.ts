@@ -72,9 +72,13 @@ async function exportSequence(
   const start = Math.max(0, options.rangeStart);
   const end = Math.min(options.rangeEnd, totalFrames(project.layers));
   const total = end - start;
+  // Repetir la animación loopCount veces en la secuencia exportada.
+  const loopCount = Math.max(1, options.loopCount ?? 1);
+  const totalToRender = total * loopCount;
   let count = 0;
 
-  for (let f = start; f < end; f++) {
+  for (let i = 0; i < totalToRender; i++) {
+    const f = start + (i % total);
     const imgData = await composeFrameToImageData(project, f, false);
 
     // Reescalar si es necesario
@@ -98,7 +102,7 @@ async function exportSequence(
     );
     frames.push(blob);
     count++;
-    onProgress?.(count / total);
+    onProgress?.(count / totalToRender);
     // Ceder el hilo para no congelar la UI
     await new Promise((r) => setTimeout(r, 0));
   }
@@ -119,10 +123,17 @@ async function exportGif(
   const start = Math.max(0, options.rangeStart);
   const end = Math.min(options.rangeEnd, totalFrames(project.layers));
   const total = end - start;
+  // Repetir la animación loopCount veces en el GIF. Los GIFs ya son
+  // inherently looping, pero si el usuario pide 3 loops renderizamos la
+  // animación 3 veces en el GIF (útil para sharing en redes donde el
+  // viewer podría no activar el loop automático).
+  const loopCount = Math.max(1, options.loopCount ?? 1);
+  const totalToRender = total * loopCount;
   let count = 0;
   const delayMs = Math.max(20, Math.round(1000 / options.fps));
 
-  for (let f = start; f < end; f++) {
+  for (let i = 0; i < totalToRender; i++) {
+    const f = start + (i % total);
     const imgData = await composeFrameToImageData(project, f, false);
 
     // Reescalar
@@ -150,7 +161,7 @@ async function exportGif(
     });
 
     count++;
-    onProgress?.(count / total);
+    onProgress?.(count / totalToRender);
     await new Promise((r) => setTimeout(r, 0));
   }
 

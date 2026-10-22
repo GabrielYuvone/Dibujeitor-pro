@@ -193,11 +193,18 @@ export async function exportMp4(
   const start = Math.max(0, options.rangeStart);
   const end = Math.min(options.rangeEnd, totalFrames(project.layers));
   const total = end - start;
-  console.log(`[MP4] Exportando ${total} frames (${start}-${end-1}) a ${options.width}x${options.height} @ ${options.fps}fps`);
+  // Cantidad de veces que se repite la animación en el export. 1 = una
+  // sola vez (default). Si el usuario pidió 3 loops, renderizamos la
+  // animación 3 veces seguidas en el video de salida.
+  const loopCount = Math.max(1, options.loopCount ?? 1);
+  const totalToRender = total * loopCount;
+  console.log(`[MP4] Exportando ${total} frames × ${loopCount} loops = ${totalToRender} frames totales (${start}-${end-1}) a ${options.width}x${options.height} @ ${options.fps}fps`);
 
-  // 1. Renderizar frames a PNG y escribirlos en el FS virtual de ffmpeg
-  for (let i = 0; i < total; i++) {
-    const frame = start + i;
+  // 1. Renderizar frames a PNG y escribirlos en el FS virtual de ffmpeg.
+  // El outer loop repite la animación loopCount veces; el frame dentro de
+  // cada loop se calcula con % total.
+  for (let i = 0; i < totalToRender; i++) {
+    const frame = start + (i % total);
     try {
       const blob = await renderFrameToBlob(
         project,
@@ -209,7 +216,7 @@ export async function exportMp4(
       const fname = `frame_${i.toString().padStart(5, "0")}.png`;
       const data = await fetchFile(blob);
       await ff.writeFile(fname, data);
-      onProgress?.(i / total, "rendering");
+      onProgress?.(i / totalToRender, "rendering");
       // Ceder al hilo para no congelar la UI
       await new Promise((r) => setTimeout(r, 0));
     } catch (e) {
@@ -330,12 +337,15 @@ export async function exportWebM(
   const start = Math.max(0, options.rangeStart);
   const end = Math.min(options.rangeEnd, totalFrames(project.layers));
   const total = end - start;
+  // Repetir la animación loopCount veces en el WebM exportado.
+  const loopCount = Math.max(1, options.loopCount ?? 1);
+  const totalToRender = total * loopCount;
   const frameDuration = 1000 / options.fps;
 
   recorder.start();
 
-  for (let i = 0; i < total; i++) {
-    const frame = start + i;
+  for (let i = 0; i < totalToRender; i++) {
+    const frame = start + (i % total);
     // Render frame
     ctx.fillStyle = options.backgroundColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -371,7 +381,7 @@ export async function exportWebM(
       // @ts-ignore
       stream.getVideoTracks()[0].requestFrame();
     }
-    onProgress?.(i / total);
+    onProgress?.(i / totalToRender);
     await new Promise((r) => setTimeout(r, frameDuration));
   }
 

@@ -302,6 +302,35 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
             </div>
           )}
 
+          {/* Loop count — repite la animación X veces en el export.
+              Aplica a todos los formatos animados (mp4, webm, gif,
+              secuencias). NO aplica a single-image (png, jpeg) porque
+              no se puede repetir una imagen estática. */}
+          {exportOptions.format !== "png" && exportOptions.format !== "jpeg" && (
+            <div>
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex justify-between">
+                <span>Loop (repeticiones)</span>
+                <span className="text-foreground">{exportOptions.loopCount ?? 1}×</span>
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                step={1}
+                value={exportOptions.loopCount ?? 1}
+                onChange={(e) => {
+                  const v = Math.max(1, Math.min(100, Number(e.target.value) || 1));
+                  setExportOptions({ loopCount: v });
+                }}
+                className="w-20 px-2 py-1 bg-background border border-border rounded text-xs font-mono"
+                title="Cuantas veces se repite la animación en el export. 1 = una vez (sin repetir), 3 = el video/animación contiene 3 loops seguidos."
+              />
+              <span className="ml-2 text-[10px] text-muted-foreground">
+                veces que se repite la animación
+              </span>
+            </div>
+          )}
+
           {/* Progreso */}
           {exporting && (
             <div>

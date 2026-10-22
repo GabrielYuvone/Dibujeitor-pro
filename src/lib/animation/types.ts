@@ -351,6 +351,11 @@ export interface ExportOptions {
   includeAudio: boolean;
   quality: number;
   backgroundColor: string;
+  // Cantidad de veces que se repite la animación en el export. 1 = una
+  // sola vez (default). 3 = el video exportado contiene la animación 3
+  // veces seguidas. Útil para loops cortos que querés ver repetidos en
+  // redes sociales sin que el viewer tenga que re-play.
+  loopCount: number;
 }
 
 // ---------------------------------------------------------------------------

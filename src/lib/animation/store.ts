@@ -356,6 +356,7 @@ export const useStore = create<AppState>((set, get) => ({
     includeAudio: true,
     quality: 0.92,
     backgroundColor: "#ffffff",
+    loopCount: 1,
   },
 
   panelLayout: "default",
