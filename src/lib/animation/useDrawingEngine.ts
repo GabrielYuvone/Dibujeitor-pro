@@ -319,7 +319,10 @@ export function useDrawingEngine({
   const loadDrawingIntoCanvas = useCallback(
     async (drawingId: string | null) => {
       const canvas = drawingCanvasRef.current;
-      const proj = activeProjectRef.current;
+      // IMPORTANTE: leer el project del store (no de activeProjectRef)
+      // porque después de ensureDrawingBounds el ref puede estar stale
+      // (se actualúa en un useEffect, no sincrónico con el store).
+      const proj = useStore.getState().project;
       if (!canvas || !proj) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
@@ -334,7 +337,9 @@ export function useDrawingEngine({
         return;
       }
 
-      const drawing = proj.drawings[drawingId];
+      // Leer el drawing fresco desde el store (no desde proj que puede
+      // ser stale si el ref no se actualizó todavía).
+      const drawing = useStore.getState().project?.drawings[drawingId];
       if (!drawing) {
         drawingIdRef.current = null;
         return;

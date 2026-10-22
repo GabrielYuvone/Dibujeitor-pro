@@ -251,17 +251,19 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
         ctx.globalAlpha = layer.opacity;
         if (hasTransform) {
-          // El pivot es el centro del canvas — el transform se aplica
-          // alrededor de ese punto, así un scale mantiene el centro.
-          // Importante: el drawImage usa las dimensiones NATURALES del
-          // drawing (drawing.width/height), no las del composited canvas
-          // (c.width/c.height) — así si el bitmap fue expandido (por
-          // dibujar más allá de los límites), se muestra a tamaño real y
-          // se clipa al composited automáticamente.
+          // Rotar/escalar alrededor del CENTRO del bitmap (no del canvas
+          // visible). Esto coincide con el transform-origin "50% 50%" del
+          // drawingCanvas, así el rendering del composited y del drawingCanvas
+          // coinciden incluso cuando el bitmap está expandido (más grande
+          // que project.settings).
           ctx.save();
-          ctx.translate(c.width / 2 + t.offsetX, c.height / 2 + t.offsetY);
+          // Mover al top-left del bitmap (con offset)
+          ctx.translate(t.offsetX, t.offsetY);
+          // Mover al centro del bitmap (pivote de rotación/escala)
+          ctx.translate(drawing.width / 2, drawing.height / 2);
           if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
           if (t.scale !== 1) ctx.scale(t.scale, t.scale);
+          // Dibujar imagen centrada en el pivote actual
           ctx.drawImage(img, -drawing.width / 2, -drawing.height / 2, drawing.width, drawing.height);
           ctx.restore();
         } else {
@@ -518,15 +520,27 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    for (const ref of [drawingCanvasRef, overlayCanvasRef, backgroundRef, compositedRef]) {
+    // NOTA: drawingCanvasRef NO se incluye acá — sus dimensiones las
+    // maneja el JSX con `drawingCanvasW/H` (que pueden ser más grandes
+    // que project.settings si el bitmap fue expandido). Si lo forzamos
+    // a project.settings, el bitmap se achica y el drawImage estira la
+    // imagen (bug: "me estira el dibujo y se deforma").
+    for (const ref of [overlayCanvasRef, backgroundRef, compositedRef]) {
       const c = ref.current;
       if (c && (c.width !== width || c.height !== height)) {
         c.width = width;
         c.height = height;
       }
     }
+    // El drawingCanvas lo redimensionamos acá también, pero usando
+    // drawingCanvasW/H (dimensiones reales del drawing activo).
+    const dc = drawingCanvasRef.current;
+    if (dc && (dc.width !== drawingCanvasW || dc.height !== drawingCanvasH)) {
+      dc.width = drawingCanvasW;
+      dc.height = drawingCanvasH;
+    }
     drawBackground();
-  }, [width, height, drawBackground]);
+  }, [width, height, drawingCanvasW, drawingCanvasH, drawBackground]);
 
   useEffect(() => {
     drawBackground();
