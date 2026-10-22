@@ -76,6 +76,11 @@ interface AppState {
   // Drafts de transform por capa (no persistidos). Ver comentario en el
   // estado inicial para más detalle.
   layerDrafts: Record<string, { offsetX: number; offsetY: number; scale: number; rotation: number }>;
+  // Selección múltiple de cells en el timeline (no persistida).
+  // El usuario puede Shift+click para rango, Ctrl/Cmd+click para toggle
+  // individual. Las operaciones bulk (borrar, duplicar) aplican a la
+  // selección completa si hay más de un cell seleccionado.
+  selectedCellIds: Set<string>;
 
   // Selección temporal (texto activo)
   drawingBuffer: HTMLCanvasElement | null;
@@ -163,6 +168,14 @@ interface AppState {
   ) => void;
   clearLayerDraft: (layerId: ID) => void;
   commitLayerDraftAsKeyframe: (layerId: ID, frame: number) => void;
+  // Selección múltiple de cells
+  selectCell: (
+    layerId: ID,
+    cellId: ID,
+    modifiers: { shift: boolean; ctrl: boolean }
+  ) => void;
+  clearCellSelection: () => void;
+  deleteSelectedCells: () => void;
 
   // Cells / drawings
   ensureDrawingForCell: (layerId: ID, frame: number) => Promise<ID>;
@@ -345,6 +358,9 @@ export const useStore = create<AppState>((set, get) => ({
   // (commitLayerDraftAsKeyframe) que captura interpolated + draft como
   // keyframe en el frame actual y resetea el draft.
   layerDrafts: {} as Record<string, { offsetX: number; offsetY: number; scale: number; rotation: number }>,
+  // Set vacío de cell IDs seleccionados en el timeline. Es un Set<string>
+  // (no array) para membership check O(1) al renderizar highlight.
+  selectedCellIds: new Set<string>(),
   // Pilas de undo/redo (no persistidas)
   undoStack: [] as HistoryEntry[],
   redoStack: [] as HistoryEntry[],
@@ -759,6 +775,84 @@ export const useStore = create<AppState>((set, get) => ({
       delete next[layerId];
       return { layerDrafts: next };
     });
+  },
+
+  // -------------------------------------------------------------------------
+  // Selección múltiple de cells (Shift=rango, Ctrl=toggle)
+  // -------------------------------------------------------------------------
+
+  selectCell: (layerId, cellId, modifiers) => {
+    const state = get();
+    if (!state.project) return;
+    const layer = state.project.layers.find((l) => l.id === layerId);
+    if (!layer) return;
+    const clickedCell = layer.cells.find((c) => c.id === cellId);
+    if (!clickedCell) return;
+
+    if (modifiers.shift) {
+      // Shift+click: seleccionar rango desde el último cell seleccionado
+      // (en la misma capa) hasta el cell clickeado. Si no hay selección
+      // previa en esta capa, el rango arranca desde el cell clickeado.
+      const lastSelectedInLayer = layer.cells.find((c) =>
+        state.selectedCellIds.has(c.id)
+      );
+      const anchor = lastSelectedInLayer ?? clickedCell;
+      const startFrame = Math.min(anchor.startFrame, clickedCell.startFrame);
+      const endFrame = Math.max(anchor.startFrame, clickedCell.startFrame);
+      const range = layer.cells.filter(
+        (c) => c.startFrame >= startFrame && c.startFrame <= endFrame
+      );
+      const newSet = new Set(state.selectedCellIds);
+      range.forEach((c) => newSet.add(c.id));
+      set({ selectedCellIds: newSet });
+    } else if (modifiers.ctrl) {
+      // Ctrl/Cmd+click: toggle individual
+      const newSet = new Set(state.selectedCellIds);
+      if (newSet.has(cellId)) newSet.delete(cellId);
+      else newSet.add(cellId);
+      set({ selectedCellIds: newSet });
+    } else {
+      // Click normal: selección única
+      set({ selectedCellIds: new Set([cellId]) });
+    }
+  },
+
+  clearCellSelection: () => {
+    set({ selectedCellIds: new Set<string>() });
+  },
+
+  deleteSelectedCells: () => {
+    const state = get();
+    if (!state.project) return;
+    const selected = state.selectedCellIds;
+    if (selected.size === 0) return;
+    get().pushProjectSnapshot();
+    // Para cada cell seleccionado, borrarlo. No dejamos una capa sin cells.
+    set(updateProject(state, (p) => ({
+      ...p,
+      layers: p.layers.map((l) => {
+        const cellsToDelete = l.cells.filter((c) => selected.has(c.id));
+        if (cellsToDelete.length === 0) return l;
+        const remaining = l.cells.filter((c) => !selected.has(c.id));
+        // Si la capa quedaría sin cells, agregar uno vacío en frame 0
+        if (remaining.length === 0) {
+          return {
+            ...l,
+            cells: [{ id: genId("cell"), drawingId: null, startFrame: 0, duration: 1 }],
+          };
+        }
+        // Re-numerar startFrames para cerrar huecos (de izquierda a derecha)
+        remaining.sort((a, b) => a.startFrame - b.startFrame);
+        let cursor = remaining[0].startFrame;
+        const rebased = remaining.map((c) => {
+          const newCell = { ...c, startFrame: cursor };
+          cursor += c.duration;
+          return newCell;
+        });
+        return { ...l, cells: rebased };
+      }),
+    })));
+    set({ selectedCellIds: new Set<string>() });
   },
 
   // -------------------------------------------------------------------------

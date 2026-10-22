@@ -52,6 +52,9 @@ export function Timeline() {
   const clearLayerTransformKeyframes = useStore((s) => s.clearLayerTransformKeyframes);
   const addMarker = useStore((s) => s.addMarker);
   const deleteMarker = useStore((s) => s.deleteMarker);
+  // Suscripción reactiva a selectedCellIds para que el highlight visual
+  // se actualice al seleccionar cells con Shift/Ctrl.
+  const selectedCellIds = useStore((s) => s.selectedCellIds);
 
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const frameWidth = 24; // ancho de cada celda en px
@@ -106,6 +109,13 @@ export function Timeline() {
   };
 
   const handleDeleteFrame = () => {
+    // Si hay selección múltiple (>1 cell seleccionado), borrar todos los
+    // seleccionados. Si no, borrar el cell del frame actual en la capa
+    // actual (comportamiento previo).
+    if (useStore.getState().selectedCellIds.size > 1) {
+      useStore.getState().deleteSelectedCells();
+      return;
+    }
     if (!project.currentLayerId) return;
     const layer = project.layers.find((l) => l.id === project.currentLayerId);
     if (!layer) return;
@@ -381,7 +391,18 @@ export function Timeline() {
       </div>
 
       {/* Cuerpo del timeline */}
-      <div ref={timelineRef} className="flex-1 overflow-auto no-scrollbar">
+      <div
+        ref={timelineRef}
+        className="flex-1 overflow-auto no-scrollbar"
+        onPointerDown={(e) => {
+          // Click en el área vacía del timeline (no en un cell) → limpiar
+          // la selección múltiple. El handler de cada cell frena la
+          // propagación, así que esto solo se dispara si se clickea fuera.
+          if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === "DIV") {
+            useStore.getState().clearCellSelection();
+          }
+        }}
+      >
         <div className="flex">
           {/* Lista de capas */}
           <div className="w-48 shrink-0 border-r border-border">
@@ -418,12 +439,15 @@ export function Timeline() {
                   const isCurrent =
                     project.currentFrame >= cell.startFrame &&
                     project.currentFrame < cell.startFrame + cell.duration;
+                  const isSelected = selectedCellIds.has(cell.id);
                   const drawing = cell.drawingId ? project.drawings[cell.drawingId] : null;
                   return (
                     <div
                       key={cell.id}
                       className={`absolute top-1 bottom-1 rounded-sm border flex items-center px-1 overflow-hidden cursor-grab active:cursor-grabbing ${
-                        isCurrent
+                        isSelected
+                          ? "border-amber-500 ring-2 ring-amber-500/60 bg-amber-500/30"
+                          : isCurrent
                           ? "border-primary ring-1 ring-primary"
                           : "border-border"
                       } ${layer.type === "audio" ? "bg-purple-500/20" : "bg-blue-500/20"}`}
@@ -434,6 +458,13 @@ export function Timeline() {
                       onClick={(e) => {
                         e.stopPropagation();
                         useStore.getState().selectLayer(layer.id);
+                        // Selección múltiple: Shift=rango, Ctrl=toggle,
+                        // click normal=único. Seleccionar ANTES de ir al
+                        // frame (para que el anchor del shift sea correcto).
+                        useStore.getState().selectCell(layer.id, cell.id, {
+                          shift: e.shiftKey,
+                          ctrl: e.ctrlKey || e.metaKey,
+                        });
                         gotoFrame(cell.startFrame);
                       }}
                       onPointerDown={(e) => {
