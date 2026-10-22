@@ -467,15 +467,43 @@ export const useStore = create<AppState>((set, get) => ({
       __version: 1,
     };
     const json = JSON.stringify(exportable, null, 2);
+    // Sanitizar el nombre sugerido: solo alfanum, guiones, guion bajo.
+    const safeName = project.name.replace(/[^a-zA-Z0-9_-]/g, "_") || "proyecto";
+
+    // Preferir el File System Access API (Chrome/Edge moderno) — le
+    // permite al usuario elegir la ubicación y el nombre del archivo en
+    // un diálogo nativo del SO. Si el browser no lo soporta o el usuario
+    // cancela, caemos al fallback de descarga automática.
+    const w = window as any;
+    if (typeof w.showSaveFilePicker === "function") {
+      try {
+        const handle = await w.showSaveFilePicker({
+          suggestedName: `${safeName}.dibu`,
+          types: [
+            {
+              description: "Proyecto Dibujeitor (.dibu)",
+              accept: { "application/json": [".dibu"] },
+            },
+          ],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(json);
+        await writable.close();
+        return; // Guardado exitoso en la ubicación elegida
+      } catch (e: any) {
+        // AbortError = el usuario canceló el diálogo (Escape o click en Cancel)
+        if (e?.name === "AbortError") return;
+        // Otro error (ej. browser no soporta createWritable) → fallback
+        console.warn("showSaveFilePicker falló, usando descarga automática:", e);
+      }
+    }
+
+    // Fallback: descarga automática al directorio de Downloads del browser.
+    // No deja elegir ubicación/nombre, pero al menos descarga el archivo.
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    // Sanitizar el nombre del archivo: solo alfanum, guiones, guion bajo.
-    const safeName = project.name.replace(/[^a-zA-Z0-9_-]/g, "_") || "proyecto";
-    // Extensión .dibu (más corta y mnemónica que .dibujeitor.json). El
-    // contenido sigue siendo JSON, pero el SO reconoce el archivo como
-    // proyecto de Dibujeitor por la extensión.
     a.download = `${safeName}.dibu`;
     document.body.appendChild(a);
     a.click();
