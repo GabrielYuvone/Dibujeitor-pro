@@ -99,29 +99,6 @@ async function getFFmpeg(): Promise<FFmpeg> {
 // Renderizar un frame a un canvas offscreen y devolver un Blob PNG
 // ---------------------------------------------------------------------------
 
-/**
- * Calcula las dimensiones máximas de bitmap a través de todos los
- * drawings visibles del proyecto. El export canvas debe ser al menos
- * tan grande como el drawing más grande, para no cortar contenido que
- * el usuario dibujó más allá de project.settings (bitmap expandido).
- */
-function getMaxDrawingDimensions(project: AnimationProject): { width: number; height: number } {
-  let maxW = 0;
-  let maxH = 0;
-  for (const layer of project.layers) {
-    if (layer.type === "audio") continue;
-    for (const cell of layer.cells) {
-      if (!cell.drawingId) continue;
-      const d = project.drawings[cell.drawingId];
-      if (d) {
-        if (d.width > maxW) maxW = d.width;
-        if (d.height > maxH) maxH = d.height;
-      }
-    }
-  }
-  return { width: maxW, height: maxH };
-}
-
 async function renderFrameToBlob(
   project: AnimationProject,
   frame: number,
@@ -139,52 +116,39 @@ async function renderFrameToBlob(
     }
   }
 
-  // Si algún drawing es más grande que el tamaño de export pedido por
-  // el usuario (porque el bitmap fue expandido al dibujar más allá de
-  // los límites), ampliamos el canvas para que entre todo. Sin esto,
-  // el contenido expandido se corta y queda en blanco (bgColor).
-  const maxDims = getMaxDrawingDimensions(project);
-  const cw = Math.max(width, maxDims.width);
-  const ch = Math.max(height, maxDims.height);
-
   const canvas = document.createElement("canvas");
-  canvas.width = cw;
-  canvas.height = ch;
+  canvas.width = width;
+  canvas.height = height;
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
 
   // Fondo
   ctx.fillStyle = bgColor;
-  ctx.fillRect(0, 0, cw, ch);
+  ctx.fillRect(0, 0, width, height);
 
   // Componer capas
   for (const layer of project.layers) {
     if (!layer.visible || layer.type === "audio") continue;
     const cell = findCellAtFrame(layer.cells, frame, layer.loopRange);
     if (!cell || !cell.drawingId) continue;
-    const drawing = project.drawings[cell.drawingId];
-    if (!drawing) continue;
     const img = getCachedImage(cell.drawingId);
     if (img && img.complete && img.naturalWidth > 0) {
       ctx.globalAlpha = layer.opacity;
       const t = interpolateLayerTransform(layer, frame);
       const hasTransform =
         t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
-      // Dibujar el drawing a tamaño NATURAL (no estirado a cw×ch) para
-      // respetar el bitmap expandido. Se posiciona según el transform
-      // interpolado de la capa (keyframes commiteados).
       if (hasTransform) {
-        // Pivot en el centro del bitmap (no del canvas de export) —
-        // coincide con el transform-origin "50% 50%" del drawingCanvas
-        // en el editor.
+        // Pivot en el centro del frame de salida (width × height)
         ctx.save();
-        ctx.translate(t.offsetX, t.offsetY);
-        ctx.translate(drawing.width / 2, drawing.height / 2);
+        ctx.translate(width / 2 + t.offsetX, height / 2 + t.offsetY);
         if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
         if (t.scale !== 1) ctx.scale(t.scale, t.scale);
-        ctx.drawImage(img, -drawing.width / 2, -drawing.height / 2, drawing.width, drawing.height);
+        ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, -width / 2, -height / 2, width, height);
         ctx.restore();
       } else {
-        ctx.drawImage(img, 0, 0, drawing.width, drawing.height);
+        // Reescalar al tamaño de salida
+        const srcW = img.naturalWidth;
+        const srcH = img.naturalHeight;
+        ctx.drawImage(img, 0, 0, srcW, srcH, 0, 0, width, height);
       }
     }
   }
@@ -355,14 +319,9 @@ export async function exportWebM(
   options: ExportOptions,
   onProgress?: (p: number) => void
 ): Promise<Blob> {
-  // Ampliar el canvas si algún drawing es más grande que options.width/height
-  // (bitmap expandido). Mismo cálculo que renderFrameToBlob.
-  const maxDims = getMaxDrawingDimensions(project);
-  const cw = Math.max(options.width, maxDims.width);
-  const ch = Math.max(options.height, maxDims.height);
   const canvas = document.createElement("canvas");
-  canvas.width = cw;
-  canvas.height = ch;
+  canvas.width = options.width;
+  canvas.height = options.height;
   const ctx = canvas.getContext("2d")!;
 
   const stream = canvas.captureStream(0); // 0 = manual frames
@@ -394,26 +353,23 @@ export async function exportWebM(
       if (!layer.visible || layer.type === "audio") continue;
       const cell = findCellAtFrame(layer.cells, frame, layer.loopRange);
       if (!cell || !cell.drawingId) continue;
-      const drawing = project.drawings[cell.drawingId];
-      if (!drawing) continue;
       const img = getCachedImage(cell.drawingId);
       if (img && img.complete && img.naturalWidth > 0) {
         ctx.globalAlpha = layer.opacity;
         const t = interpolateLayerTransform(layer, frame);
         const hasTransform =
           t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
-        // Dibujar a tamaño natural (respetando bitmap expandido), pivot
-        // en el centro del bitmap (igual que renderFrameToBlob).
         if (hasTransform) {
+          const W = canvas.width;
+          const H = canvas.height;
           ctx.save();
-          ctx.translate(t.offsetX, t.offsetY);
-          ctx.translate(drawing.width / 2, drawing.height / 2);
+          ctx.translate(W / 2 + t.offsetX, H / 2 + t.offsetY);
           if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
           if (t.scale !== 1) ctx.scale(t.scale, t.scale);
-          ctx.drawImage(img, -drawing.width / 2, -drawing.height / 2, drawing.width, drawing.height);
+          ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, -W / 2, -H / 2, W, H);
           ctx.restore();
         } else {
-          ctx.drawImage(img, 0, 0, drawing.width, drawing.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         }
       }
     }
