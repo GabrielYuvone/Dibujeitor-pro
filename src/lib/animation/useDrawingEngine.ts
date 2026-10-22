@@ -31,7 +31,7 @@ import {
   dataUrlToImageData,
 } from "./drawing";
 import type { ToolId } from "./types";
-import { genId, totalFrames, interpolateLayerTransform } from "./utils";
+import { genId, totalFrames, interpolateLayerTransform, getEffectiveLayerTransform } from "./utils";
 
 interface DrawingEngineState {
   drawingCanvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -291,13 +291,26 @@ export function useDrawingEngine({
       const proj = activeProjectRef.current;
       if (!container || !proj) return null;
       const rect = container.getBoundingClientRect();
+      // Calcular el transform efectivo de la capa activa (interpolated + draft)
+      // para reverse-transformar el click y mapearlo al bitmap correcto cuando
+      // la capa está movida vía CSS en el drawingCanvas.
+      const activeLayer = proj.currentLayerId
+        ? proj.layers.find((l) => l.id === proj.currentLayerId)
+        : null;
+      const draft = activeLayer
+        ? useStore.getState().layerDrafts[activeLayer.id]
+        : undefined;
+      const layerTransform = activeLayer
+        ? getEffectiveLayerTransform(activeLayer, proj.currentFrame, draft)
+        : undefined;
       return screenToCanvas(
         clientX,
         clientY,
         rect,
         activeCanvasViewRef.current,
         proj.settings.width,
-        proj.settings.height
+        proj.settings.height,
+        layerTransform
       );
     },
     [containerRef]

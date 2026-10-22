@@ -442,7 +442,11 @@ export function screenToCanvas(
   canvasRect: DOMRect,
   view: { zoom: number; panX: number; panY: number; rotation: number },
   projectWidth: number,
-  projectHeight: number
+  projectHeight: number,
+  // Transform de la capa activa (offset/scale/rotation aplicado al
+  // drawingCanvas vía CSS). Si se pasa, reverse-transformamos el click
+  // para que mapee al pixel correcto del bitmap.
+  layerTransform?: { offsetX: number; offsetY: number; scale: number; rotation: number }
 ): { x: number; y: number } {
   // 1. offset desde el centro del contenedor en coords de pantalla
   const dx = screenX - canvasRect.left - canvasRect.width / 2;
@@ -464,8 +468,37 @@ export function screenToCanvas(
   const ry = ux * sin + uy * cos;
 
   // 5. convertir de coords-centradas a bitmap (sumar W/2, H/2)
-  const bx = rx + projectWidth / 2;
-  const by = ry + projectHeight / 2;
+  let bx = rx + projectWidth / 2;
+  let by = ry + projectHeight / 2;
+
+  // 6. Si la capa activa tiene un transform (keyframes + draft), el
+  // drawingCanvas se mueve visualmente vía CSS. El click hittea el
+  // bitmap movido, así que necesitamos reverse-transformar para obtener
+  // el pixel original del bitmap.
+  //
+  // El CSS transform es: translate(offsetX, offsetY) rotate(rotation) scale(scale)
+  // aplicado alrededor del centro del canvas. Para revertir:
+  //   - Restar el offset (en canvas coords) y el centro
+  //   - Rotar por -rotation alrededor del centro
+  //   - Escalar por 1/scale alrededor del centro
+  if (layerTransform && (layerTransform.offsetX !== 0 || layerTransform.offsetY !== 0 || layerTransform.scale !== 1 || layerTransform.rotation !== 0)) {
+    // Coords relativas al centro del canvas + offset
+    let lx = bx - (projectWidth / 2 + layerTransform.offsetX);
+    let ly = by - (projectHeight / 2 + layerTransform.offsetY);
+    // Rotación inversa alrededor del (nuevo) centro
+    const lAng = (-layerTransform.rotation * Math.PI) / 180;
+    const lCos = Math.cos(lAng);
+    const lSin = Math.sin(lAng);
+    const r2x = lx * lCos - ly * lSin;
+    const r2y = lx * lSin + ly * lCos;
+    // Scale inverso
+    const s2x = r2x / layerTransform.scale;
+    const s2y = r2y / layerTransform.scale;
+    // Volver a coords bitmap
+    bx = s2x + projectWidth / 2;
+    by = s2y + projectHeight / 2;
+  }
+
   return { x: bx, y: by };
 }
 

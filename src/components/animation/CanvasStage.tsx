@@ -82,11 +82,39 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   // En edit mode, AMBOS canvases están visibles: el composited (con onion
   // skin + capas no-activas) DEBAJO del drawing canvas (la capa activa).
   //
-  // EXCEPCIÓN: cuando el tool activo es "move-layer", también compositamos
-  // la capa activa (con su transform) y ocultamos el drawingCanvas. Si no,
-  // el usuario vería la capa estática en (0,0) en el drawingCanvas y no
-  // notaría el desplazamiento durante el drag (solo lo vería al hacer play).
-  const isCompositing = viewMode === "preview" || playback.playing || currentTool === "move-layer" || spaceModifier;
+  // IMPORTANTE: el transform de la capa activa (keyframes + draft) se
+  // aplica al drawingCanvas vía CSS (ver `activeLayerCssTransform` abajo).
+  // Esto permite ver y editar la capa en su posición movida, sin que
+  // "salte" al soltar espacio. El composited NO incluye la capa activa
+  // en edit mode (para no duplicar).
+  const isCompositing = viewMode === "preview" || playback.playing;
+
+  // Transform EFECTIVO de la capa activa = interpolated (de keyframes) + draft.
+  // Lo aplicamos al drawingCanvas vía CSS para que el usuario vea la capa
+  // en su posición movida, incluso después de soltar espacio (el draft
+  // persiste hasta que el usuario lo commitea como keyframe o lo limpia).
+  // Esto soluciona el bug de "la capa vuelve a donde estaba al soltar space".
+  // El transform-origin: 50% 50% (default) hace que rotate/scale sean
+  // alrededor del centro del canvas, igual que el ctx.translate + rotate
+  // + scale que aplica el composited.
+  const activeLayerForTransform = project?.currentLayerId
+    ? project.layers.find((l) => l.id === project.currentLayerId)
+    : null;
+  const activeLayerTransform = activeLayerForTransform
+    ? getEffectiveLayerTransform(
+        activeLayerForTransform,
+        project?.currentFrame ?? 0,
+        layerDrafts[activeLayerForTransform.id]
+      )
+    : { offsetX: 0, offsetY: 0, scale: 1, rotation: 0 };
+  const activeLayerHasTransform =
+    activeLayerTransform.offsetX !== 0 ||
+    activeLayerTransform.offsetY !== 0 ||
+    activeLayerTransform.scale !== 1 ||
+    activeLayerTransform.rotation !== 0;
+  const activeLayerCssTransform = activeLayerHasTransform
+    ? `translate(${activeLayerTransform.offsetX}px, ${activeLayerTransform.offsetY}px) rotate(${activeLayerTransform.rotation}deg) scale(${activeLayerTransform.scale})`
+    : undefined;
 
   // ---------------------------------------------------------------------------
   // Pintar fondo
@@ -161,13 +189,9 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     ctx.globalCompositeOperation = "source-over";
 
     // En edit mode (sin playback), la capa activa se muestra en el drawing
-    // canvas (arriba). La excluimos del composited para no duplicar.
-    // PERO si el tool activo es "move-layer" O el espacio está apretado
-    // (modo "move-layer temporal"), queremos ver la capa activa compositada
-    // CON su transform — excluirla significaría no ver el desplazamiento
-    // en tiempo real durante el drag.
-    const excludeActiveLayer =
-      viewMode === "edit" && !playback.playing && currentTool !== "move-layer" && !spaceModifier;
+    // canvas (arriba) CON su transform aplicado vía CSS. La excluimos del
+    // composited para no duplicar.
+    const excludeActiveLayer = viewMode === "edit" && !playback.playing;
     const activeLayerId = project.currentLayerId;
 
     // Onion skin primero (debajo de las capas reales) — solo en edit mode
@@ -671,7 +695,19 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           width={width}
           height={height}
           className="absolute inset-0 canvas-surface"
-          style={{ width, height, visibility: isCompositing ? "hidden" : "visible" }}
+          style={{
+            width,
+            height,
+            visibility: isCompositing ? "hidden" : "visible",
+            // Aplicamos el transform de la capa activa (keyframes + draft)
+            // al drawingCanvas vía CSS. Esto mueve visualmente la capa a su
+            // posición movida (igual que el composited aplica el transform
+            // para las capas no-activas), y permite al usuario seguir
+            // dibujando en la capa movida (los clicks se reverse-transforman
+            // en el engine).
+            transform: activeLayerCssTransform,
+            transformOrigin: "50% 50%",
+          }}
         />
         {/* Overlay (selección, primitivas preview) */}
         <canvas
