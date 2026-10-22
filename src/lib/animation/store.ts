@@ -691,6 +691,11 @@ export const useStore = create<AppState>((set, get) => ({
       return existing.drawingId;
     }
 
+    // Snapshot ANTES de mutar — esto es lo que faltaba para que el primer
+    // "+" del usuario sea deshacerable (issue reportado: "apenas empiezo
+    // a trabajar no puedo deshacer el frame").
+    get().pushProjectSnapshot();
+
     // Crear nuevo Drawing vacío
     const drawingId = genId("draw");
     const now = Date.now();
@@ -740,6 +745,7 @@ export const useStore = create<AppState>((set, get) => ({
   setCellDrawing: (layerId, frame, drawingId) => {
     const state = get();
     if (!state.project) return;
+    get().pushProjectSnapshot();
     set(updateProject(state, (p) => {
       const layers = p.layers.map((l) => {
         if (l.id !== layerId) return l;

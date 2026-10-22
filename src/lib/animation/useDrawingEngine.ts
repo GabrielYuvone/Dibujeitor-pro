@@ -125,6 +125,17 @@ export function useDrawingEngine({
   const xModifierRef = useRef(false);
   // Modificador C: mientras se mantiene C apretado, entra en modo pan.
   const cModifierRef = useRef(false);
+  // Modificador Espacio: doble propósito.
+  //  - TAP (apretar y soltar rápido sin arrastrar): toggle play/pausa.
+  //  - HOLD + arrastrar: mueve la capa actual (igual que el tool "move-layer"
+  //    pero sin tener que cambiar de tool). Es el equivalente a "pan con H
+  //    temporal" pero para la capa en vez de la vista.
+  // Distinguimos tap vs hold+drag con dos flags: si durante la presión el
+  // usuario hizo un drag, marcamos spaceDragHappenedRef. En keyup, si no hubo
+  // drag Y la duración fue corta (< 500ms), consideramos tap → togglePlay.
+  const spaceModifierRef = useRef(false);
+  const spaceKeyDownTimeRef = useRef(0);
+  const spaceDragHappenedRef = useRef(false);
   // Modificador Ctrl: mientras se mantiene Ctrl apretado + drag, entra en
   // modo "resize brush" (cambiar tamaño del pincel arrastrando arriba/abajo).
   const ctrlModifierRef = useRef(false);
@@ -169,6 +180,15 @@ export function useDrawingEngine({
         cModifierRef.current = true;
       } else if (k === "control") {
         ctrlModifierRef.current = true;
+      } else if (e.key === " " || e.code === "Space") {
+        // Espacio: no disparar play acá (lo hacemos en keyup si fue tap).
+        // Prevenir el scroll default de la página.
+        e.preventDefault();
+        // Si ya está apretado (auto-repeat del teclado), no re-setear.
+        if (spaceModifierRef.current) return;
+        spaceModifierRef.current = true;
+        spaceKeyDownTimeRef.current = Date.now();
+        spaceDragHappenedRef.current = false;
       }
     };
     const onUp = (e: KeyboardEvent) => {
@@ -200,6 +220,23 @@ export function useDrawingEngine({
           isResizingBrushRef.current = false;
           brushResizeStartRef.current = null;
         }
+      } else if (e.key === " " || e.code === "Space") {
+        // Si no hubo drag Y la duración fue corta (< 500ms), es un tap →
+        // toggle play/pausa. Si hubo drag o fue un hold largo, no
+        // disparamos play (fue un move-layer).
+        const duration = Date.now() - spaceKeyDownTimeRef.current;
+        const wasTap = !spaceDragHappenedRef.current && duration < 500;
+        spaceModifierRef.current = false;
+        spaceKeyDownTimeRef.current = 0;
+        spaceDragHappenedRef.current = false;
+        // Si estábamos moviendo una capa al soltar space, terminar el drag
+        if (isMovingLayerRef.current) {
+          isMovingLayerRef.current = false;
+          moveLayerStartRef.current = null;
+        }
+        if (wasTap) {
+          useStore.getState().togglePlay();
+        }
       }
     };
     window.addEventListener("keydown", onDown);
@@ -210,6 +247,9 @@ export function useDrawingEngine({
       xModifierRef.current = false;
       cModifierRef.current = false;
       ctrlModifierRef.current = false;
+      spaceModifierRef.current = false;
+      spaceKeyDownTimeRef.current = 0;
+      spaceDragHappenedRef.current = false;
       useStore.setState({ zModifier: false, xModifier: false });
     });
     return () => {
@@ -379,6 +419,30 @@ export function useDrawingEngine({
       // Si X está apretado, cualquier herramienta de trazo se convierte en goma.
       const baseTool = activeToolRef.current;
       const tool: ToolId = xModifierRef.current ? "eraser" : baseTool;
+
+      // --- MODIFICADOR ESPACIO: si space está apretado, entrar en modo
+      // move-layer (igual que el tool "move-layer" pero sin cambiar el tool
+      // activo). Esto tiene prioridad sobre Z/C/Ctrl porque el usuario
+      // decide con el primer click si fue un tap (→ play) o un hold+drag
+      // (→ move-layer). Marcamos spaceDragHappenedRef para que en keyup
+      // NO se dispare play (fue un move-layer, no un tap).
+      if (spaceModifierRef.current && proj.currentLayerId) {
+        const spaceLayer = proj.layers.find((l) => l.id === proj.currentLayerId);
+        if (spaceLayer) {
+          const t = interpolateLayerTransform(spaceLayer, proj.currentFrame);
+          isMovingLayerRef.current = true;
+          spaceDragHappenedRef.current = true;
+          moveLayerStartRef.current = {
+            startClientX: e.clientX,
+            startClientY: e.clientY,
+            startOffsetX: t.offsetX,
+            startOffsetY: t.offsetY,
+            layerId: proj.currentLayerId,
+            frame: proj.currentFrame,
+          };
+          return;
+        }
+      }
 
       // --- MODIFICADOR Z: si Z está apretado, entrar en modo zoom por arrastre ---
       // Arrastra hacia ARRIBA (dy<0) para acercar; hacia ABAJO (dy>0) para alejar.

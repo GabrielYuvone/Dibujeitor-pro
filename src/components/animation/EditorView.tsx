@@ -158,10 +158,9 @@ export function EditorView() {
         // NOTA: Z es ahora un MODIFICADOR temporal (mantener apretado para zoom)
         // y NO cambia el tool activo. Para hacer zoom: presionar Z, arrastrar hacia
         // arriba/abajo o usar la rueda del mouse, soltar Z para volver a dibujar.
-        case " ":
-          e.preventDefault();
-          togglePlay();
-          break;
+        // NOTA: la barra espaciadora NO se maneja acá — la maneja el engine
+        // (useDrawingEngine) con la lógica tap-vs-hold+drag: tap = play,
+        // hold + arrastrar = mover la capa actual.
         case "arrowright":
           e.preventDefault();
           useStore.getState().nextFrame();
