@@ -311,21 +311,11 @@ export function Timeline() {
 
         <div className="flex items-center gap-2 text-xs">
           <label className="text-muted-foreground">Velocidad:</label>
-          <select
-            value={playback.playbackFps}
-            onChange={(e) => setPlaybackFps(Number(e.target.value))}
-            className="bg-background border border-border rounded px-1 py-0.5 text-xs"
-          >
-            <option value={1}>1 FPS</option>
-            <option value={2}>2 FPS</option>
-            <option value={3}>3 FPS</option>
-            <option value={6}>6 FPS</option>
-            <option value={12}>12 FPS</option>
-            <option value={24}>24 FPS</option>
-            <option value={30}>30 FPS</option>
-            <option value={60}>60 FPS</option>
-          </select>
-          {/* Input numérico para FPS personalizado */}
+          {/* Input numérico único para FPS. Antes había también un <select>
+              con presets al lado, lo que generaba confusión porque ambos
+              mostraban el mismo valor (parecían duplicados). El input
+              permite cualquier valor entre 1 y 120, y las flechas arriba/
+              abajo suben/bajan de a 1. */}
           <input
             type="number"
             min={1}
@@ -335,8 +325,8 @@ export function Timeline() {
               const f = Number(e.target.value);
               if (!Number.isNaN(f) && f > 0) setPlaybackFps(f);
             }}
-            className="w-12 px-1 py-0.5 bg-background border border-border rounded text-xs"
-            title="FPS personalizado"
+            className="w-14 px-1 py-0.5 bg-background border border-border rounded text-xs font-mono"
+            title="FPS de reproducción"
           />
           <span className="text-muted-foreground">FPS</span>
         </div>
