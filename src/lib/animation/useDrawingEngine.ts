@@ -1285,6 +1285,51 @@ export function useDrawingEngine({
           }
           return;
         }
+        // No hay selección in-app copiada — intentar pegar imagen del
+        // clipboard del sistema (ej. copiaste una imagen de otro browser
+        // o editor). Si el browser soporta navigator.clipboard.read() y
+        // el usuario da permiso, la imagen se carga como "image placement"
+        // con handles para mover y escalar.
+        e.preventDefault();
+        try {
+          const clipboardItems = await navigator.clipboard.read();
+          for (const item of clipboardItems) {
+            const imageType = item.types.find((t) => t.startsWith("image/"));
+            if (imageType) {
+              const blob = await item.getType(imageType);
+              const dataUrl = await new Promise<string>((resolve, reject) => {
+                const r = new FileReader();
+                r.onload = () => resolve(r.result as string);
+                r.onerror = reject;
+                r.readAsDataURL(blob);
+              });
+              // Medir dimensiones nativas para que startImagePlacement
+              // pueda calcular el tamaño inicial con aspect ratio correcto.
+              const img = new Image();
+              img.src = dataUrl;
+              await new Promise<void>((r) => {
+                img.onload = () => r();
+                img.onerror = () => r();
+              });
+              useStore.getState().startImagePlacement(
+                dataUrl,
+                img.naturalWidth || 800,
+                img.naturalHeight || 600
+              );
+              return;
+            }
+          }
+          // No había imagen en el clipboard — salir silenciosamente
+        } catch (err) {
+          // navigator.clipboard.read() puede fallar por:
+          //  - No HTTPS/localhost (security)
+          //  - Permiso denegado por el usuario
+          //  - Browser no soporta clipboard API
+          // Salir silenciosamente — el usuario puede usar el botón
+          // "Importar imagen" del panel Library como alternativa.
+          console.warn("No se pudo leer imagen del clipboard:", err);
+        }
+        return;
       }
       // Shift+Ctrl+V = pegar en el centro
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "v" || e.key === "V")) {
