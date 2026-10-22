@@ -7,7 +7,7 @@
 import { GIFEncoder, quantize, applyPalette } from "gifenc";
 import type { AnimationProject, ExportOptions, ExportFormat } from "./types";
 import { dataUrlToImageData, hexToRgb } from "./drawing";
-import { findCellAtFrame, totalFrames } from "./utils";
+import { findCellAtFrame, totalFrames, interpolateLayerTransform } from "./utils";
 
 // ---------------------------------------------------------------------------
 // Renderiza un frame a ImageData compuesto (todas las capas visibles)
@@ -28,8 +28,6 @@ async function composeFrameToImageData(
   ctx.fillRect(0, 0, width, height);
 
   // Para cada capa (de abajo hacia arriba), buscar la celda activa
-  // Las capas en project.layers están ordenadas con la primera en la parte
-  // inferior, por lo que iteramos en orden normal.
   for (const layer of project.layers) {
     if (!layer.visible) continue;
     if (layer.type === "audio") continue;
@@ -40,15 +38,33 @@ async function composeFrameToImageData(
     if (!drawing) continue;
 
     try {
-      const imgData = await dataUrlToImageData(drawing.dataUrl, width, height);
-      // Aplicar opacidad
+      // Convertir el dataUrl a ImageData, ponerlo en un canvas temporal,
+      // y dibujarlo con el transform de la capa aplicado.
+      const imgData = await dataUrlToImageData(drawing.dataUrl, drawing.width, drawing.height);
       const tmp = document.createElement("canvas");
-      tmp.width = width;
-      tmp.height = height;
+      tmp.width = drawing.width;
+      tmp.height = drawing.height;
       const tmpCtx = tmp.getContext("2d")!;
       tmpCtx.putImageData(imgData, 0, 0);
+
+      // Transform interpolado de la capa en este frame (keyframes).
+      // Sin esto, el GIF/sequence no respeta el movimiento de la capa.
+      const t = interpolateLayerTransform(layer, frame);
+      const hasTransform =
+        t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
+
       ctx.globalAlpha = layer.opacity;
-      ctx.drawImage(tmp, 0, 0);
+      if (hasTransform) {
+        ctx.save();
+        ctx.translate(t.offsetX, t.offsetY);
+        ctx.translate(drawing.width / 2, drawing.height / 2);
+        if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
+        if (t.scale !== 1) ctx.scale(t.scale, t.scale);
+        ctx.drawImage(tmp, -drawing.width / 2, -drawing.height / 2, drawing.width, drawing.height);
+        ctx.restore();
+      } else {
+        ctx.drawImage(tmp, 0, 0, drawing.width, drawing.height);
+      }
       ctx.globalAlpha = 1;
     } catch (e) {
       console.error("Error componiendo capa:", e);
