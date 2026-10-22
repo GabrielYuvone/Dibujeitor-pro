@@ -224,17 +224,17 @@ export function useDrawingEngine({
       } else if (e.key === " " || e.code === "Space") {
         // Si no hubo drag Y la duración fue corta (< 500ms), es un tap →
         // toggle play/pausa. Si hubo drag o fue un hold largo, no
-        // disparamos play (fue un move-layer).
+        // disparamos play (fue un pan, no un tap).
         const duration = Date.now() - spaceKeyDownTimeRef.current;
         const wasTap = !spaceDragHappenedRef.current && duration < 500;
         spaceModifierRef.current = false;
         useStore.setState({ spaceModifier: false });
         spaceKeyDownTimeRef.current = 0;
         spaceDragHappenedRef.current = false;
-        // Si estábamos moviendo una capa al soltar space, terminar el drag
-        if (isMovingLayerRef.current) {
-          isMovingLayerRef.current = false;
-          moveLayerStartRef.current = null;
+        // Si estábamos paneando al soltar space, terminar el pan
+        if (isPanningRef.current) {
+          isPanningRef.current = false;
+          panStartRef.current = null;
         }
         if (wasTap) {
           useStore.getState().togglePlay();
@@ -435,33 +435,24 @@ export function useDrawingEngine({
       const baseTool = activeToolRef.current;
       const tool: ToolId = xModifierRef.current ? "eraser" : baseTool;
 
-      // --- MODIFICADOR ESPACIO: si space está apretado, entrar en modo
-      // move-layer (igual que el tool "move-layer" pero sin cambiar el tool
-      // activo). Esto tiene prioridad sobre Z/C/Ctrl porque el usuario
-      // decide con el primer click si fue un tap (→ play) o un hold+drag
-      // (→ move-layer). Marcamos spaceDragHappenedRef para que en keyup
-      // NO se dispare play (fue un move-layer, no un tap).
-      if (spaceModifierRef.current && proj.currentLayerId) {
-        const spaceLayer = proj.layers.find((l) => l.id === proj.currentLayerId);
-        if (spaceLayer) {
-          // El offset inicial visible = interpolated + draft actual.
-          // Si hay un draft acumulado de un drag anterior, lo respetamos
-          // (sino la capa "saltaría" al interpolado al empezar un nuevo
-          // drag).
-          const t = interpolateLayerTransform(spaceLayer, proj.currentFrame);
-          const draft = useStore.getState().layerDrafts[spaceLayer.id];
-          isMovingLayerRef.current = true;
-          spaceDragHappenedRef.current = true;
-          moveLayerStartRef.current = {
-            startClientX: e.clientX,
-            startClientY: e.clientY,
-            startOffsetX: t.offsetX + (draft?.offsetX ?? 0),
-            startOffsetY: t.offsetY + (draft?.offsetY ?? 0),
-            layerId: proj.currentLayerId,
-            frame: proj.currentFrame,
-          };
-          return;
-        }
+      // --- MODIFICADOR ESPACIO: si space está apretado, entrar en modo PAN
+      // (mover el canvas/viewport). Antes esto movía la capa (move-layer),
+      // pero el usuario prefiere que space sea para navegar el canvas —
+      // para mover la capa se usa el tool "Mover capa" (M).
+      // Marcamos spaceDragHappenedRef para que en keyup NO se dispare play
+      // (fue un pan, no un tap).
+      if (spaceModifierRef.current) {
+        isPanningRef.current = true;
+        isDrawingRef.current = false;
+        useStore.setState({ isDrawing: false });
+        spaceDragHappenedRef.current = true;
+        panStartRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          panX: activeCanvasViewRef.current.panX,
+          panY: activeCanvasViewRef.current.panY,
+        };
+        return;
       }
 
       // --- MODIFICADOR Z: si Z está apretado, entrar en modo zoom por arrastre ---
@@ -1065,8 +1056,34 @@ export function useDrawingEngine({
           const h = Math.abs(lastPosRef.current.y - startPosRef.current.y);
           if (w > 2 && h > 2) {
             selectionBoundsRef.current = { x, y, width: w, height: h };
-            // NO cortar automáticamente. Solo seleccionar.
-            // El usuario puede hacer Ctrl+C (copiar) o Ctrl+X (cortar) después.
+            // AUTO-CAPTURAR los píxeles de la selección al terminar el drag.
+            // Antes no se capturaba → el segundo Ctrl+V usaba la captura
+            // vieja (la del primer Ctrl+C). Auto-capturar acá significa
+            // que cada nueva selección actualiza el "clipboard" interno
+            // automáticamente, sin necesidad de Ctrl+C explícito. El
+            // usuario todavía puede hacer Ctrl+C si quiere "freezar" una
+            // copia para pegar en otro frame (donde el canvas cambia).
+            const canvas = drawingCanvasRef.current;
+            if (canvas) {
+              const ctx = canvas.getContext("2d");
+              if (ctx) {
+                try {
+                  const imgData = ctx.getImageData(
+                    Math.max(0, Math.floor(x)),
+                    Math.max(0, Math.floor(y)),
+                    Math.min(w, canvas.width - Math.floor(x)),
+                    Math.min(h, canvas.height - Math.floor(y))
+                  );
+                  // Limpiar píxeles casi transparentes (alpha < 10 → 0)
+                  for (let i = 3; i < imgData.data.length; i += 4) {
+                    if (imgData.data[i] < 10) imgData.data[i] = 0;
+                  }
+                  selectionImageRef.current = imgData;
+                } catch (_) {
+                  // ignore
+                }
+              }
+            }
             // Dibujar "marching ants" en overlay
             if (overlay) {
               const octx = overlay.getContext("2d");
