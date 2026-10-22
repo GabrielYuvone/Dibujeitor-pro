@@ -115,6 +115,11 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   const activeLayerCssTransform = activeLayerHasTransform
     ? `translate(${activeLayerTransform.offsetX}px, ${activeLayerTransform.offsetY}px) rotate(${activeLayerTransform.rotation}deg) scale(${activeLayerTransform.scale})`
     : undefined;
+  // ¿Está oculta la capa activa? Si lo está, escondemos el drawingCanvas
+  // (que muestra la capa activa en edit mode). Antes el drawingCanvas
+  // ignoraba `layer.visible` → el ojo (eye toggle) no funcionaba para la
+  // capa actualmente seleccionada, solo para las demás.
+  const activeLayerVisible = activeLayerForTransform ? activeLayerForTransform.visible : true;
 
   // ---------------------------------------------------------------------------
   // Pintar fondo
@@ -194,10 +199,12 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     const excludeActiveLayer = viewMode === "edit" && !playback.playing;
     const activeLayerId = project.currentLayerId;
 
-    // Onion skin primero (debajo de las capas reales) — solo en edit mode
+    // Onion skin primero (debajo de las capas reales) — solo en edit mode.
+    // Respetamos layer.visible — si la capa activa está oculta, no dibujar
+    // su onion skin (el ojo debería funcionar también para el onion).
     if (onion.enabled && excludeActiveLayer) {
       const currentLayer = getCurrentLayer(project);
-      if (currentLayer && currentLayer.type !== "audio") {
+      if (currentLayer && currentLayer.type !== "audio" && currentLayer.visible) {
         drawOnionIntoCanvas(ctx, project, currentLayer, onion);
       }
     }
@@ -705,7 +712,9 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           style={{
             width,
             height,
-            visibility: isCompositing ? "hidden" : "visible",
+            // Escondemos el drawingCanvas si estamos compositando (playback/
+            // preview) O si la capa activa está oculta (eye toggle).
+            visibility: isCompositing || !activeLayerVisible ? "hidden" : "visible",
             // Aplicamos el transform de la capa activa (keyframes + draft)
             // al drawingCanvas vía CSS. Esto mueve visualmente la capa a su
             // posición movida (igual que el composited aplica el transform

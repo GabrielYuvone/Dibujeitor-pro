@@ -1671,9 +1671,35 @@ export const useStore = create<AppState>((set, get) => ({
     // Renderizar la imagen al tamaño actual en el canvas del drawing activo
     // Crear nuevo drawing o usar el existente
     const layer = s.project.layers.find((l) => l.id === s.project!.currentLayerId);
-    if (!layer || layer.locked || !layer.visible || layer.type === "audio") {
+    if (!layer) {
+      // No hay capa activa — no pegar, mostrar error claro
       set({ imagePlacement: null });
+      console.warn("confirmImagePlacement: no hay capa activa");
       return;
+    }
+    if (layer.locked) {
+      // Capa bloqueada — no se puede pegar, mostrar error claro
+      set({ imagePlacement: null });
+      alert(`La capa "${layer.name}" está bloqueada. Desbloqueala para pegar la imagen.`);
+      return;
+    }
+    if (layer.type === "audio") {
+      // Capa de audio — no acepta imágenes
+      set({ imagePlacement: null });
+      alert(`La capa "${layer.name}" es de audio. Seleccioná una capa de dibujo/referencia/fondo para pegar.`);
+      return;
+    }
+    // Si la capa está OCULTA, la mostramos automáticamente — el usuario
+    // está pegando explícitamente, así que quiere verla. Antes esto
+    // abortaba silenciosamente y la imagen "desaparecía" sin explicación
+    // (issue reportado: "no sé donde pega la imagen").
+    if (!layer.visible) {
+      set(updateProject(s, (p) => ({
+        ...p,
+        layers: p.layers.map((l) =>
+          l.id === layer.id ? { ...l, visible: true } : l
+        ),
+      })));
     }
 
     // Cargar la imagen
