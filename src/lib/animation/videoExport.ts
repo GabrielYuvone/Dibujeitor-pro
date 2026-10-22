@@ -200,6 +200,44 @@ export async function exportMp4(
   const totalToRender = total * loopCount;
   console.log(`[MP4] Exportando ${total} frames × ${loopCount} loops = ${totalToRender} frames totales (${start}-${end-1}) a ${options.width}x${options.height} @ ${options.fps}fps`);
 
+  // Safety check: si no hay frames para renderizar, tirar error claro
+  // en vez de producir un video vacío.
+  if (totalToRender <= 0) {
+    throw new Error("No hay frames para exportar. Verificá que el proyecto tenga al menos un frame y que el rango de export sea válido.");
+  }
+
+  // PRE-EXPORT CLEANUP: eliminar frames viejos del FS virtual de ffmpeg
+  // que pudieron quedar de exports anteriores. Si un export anterior
+  // tuvo más frames que el actual, esos frames viejos se quedarían en
+  // el FS y ffmpeg los leería junto con los nuevos, produciendo un video
+  // con frames mezclados (ej: 10 nuevos + 20 viejos = 30 frames, donde
+  // los últimos 20 son basura). Esto causa el bug "el video abre pero
+  // vacío".
+  try {
+    // Brute-force: borrar frame_00000 a frame_00999 (suficiente para
+    // la mayoría de los proyectos; si hay más, el loop de render los
+    // sobrescribe igual).
+    for (let i = 0; i < 1000; i++) {
+      const fname = `frame_${i.toString().padStart(5, "0")}.png`;
+      try {
+        await ff.deleteFile(fname);
+      } catch (_) {
+        // El archivo no existe — está bien, seguir
+      }
+    }
+    // También borrar output.mp4 viejo si existe
+    try {
+      await ff.deleteFile("output.mp4");
+    } catch (_) {}
+    // Y archivos de audio viejos
+    try {
+      await ff.deleteFile("audio.mp3");
+    } catch (_) {}
+    try {
+      await ff.deleteFile("audio.wav");
+    } catch (_) {}
+  } catch (_) {}
+
   // 1. Renderizar frames a PNG y escribirlos en el FS virtual de ffmpeg.
   // El outer loop repite la animación loopCount veces; el frame dentro de
   // cada loop se calcula con % total.
@@ -297,9 +335,10 @@ export async function exportMp4(
   }
   const blob = new Blob([data as BlobPart], { type: "video/mp4" });
 
-  // 6. Limpieza del FS virtual
+  // 6. Limpieza del FS virtual — borrar TODOS los frames que escribimos
+  // (totalToRender, no total — si no, los del loopCount > 1 se quedan).
   try {
-    for (let i = 0; i < total; i++) {
+    for (let i = 0; i < totalToRender; i++) {
       const fname = `frame_${i.toString().padStart(5, "0")}.png`;
       await ff.deleteFile(fname);
     }
