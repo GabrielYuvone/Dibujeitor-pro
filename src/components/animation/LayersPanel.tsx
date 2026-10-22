@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { useStore, getOrderedLayers } from "@/lib/animation/store";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,9 +20,9 @@ import {
   Square as SquareIcon,
   Repeat,
   ChevronRight,
+  GitMerge,
 } from "lucide-react";
 import type { LayerType } from "@/lib/animation/types";
-import { useState } from "react";
 
 export function LayersPanel() {
   const project = useStore((s) => s.project);
@@ -34,9 +34,16 @@ export function LayersPanel() {
   const toggleLayerLocked = useStore((s) => s.toggleLayerLocked);
   const setLayerOpacity = useStore((s) => s.setLayerOpacity);
   const moveLayer = useStore((s) => s.moveLayer);
+  const moveLayerToIndex = useStore((s) => s.moveLayerToIndex);
+  const mergeLayers = useStore((s) => s.mergeLayers);
   const duplicateLayer = useStore((s) => s.duplicateLayer);
   const setLayerLoop = useStore((s) => s.setLayerLoop);
   const [expandedLoop, setExpandedLoop] = useState<string | null>(null);
+  // Multi-selección de capas para merge. Shift+click = rango, Ctrl+click = toggle.
+  const [selectedLayerIds, setSelectedLayerIds] = useState<Set<string>>(new Set());
+  // Drag state para reordenar
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   if (!project) return null;
 
@@ -62,6 +69,21 @@ export function LayersPanel() {
           <LayersIcon size={16} /> Capas
         </h3>
         <div className="flex gap-1">
+          {/* Merge button — solo aparece cuando hay >1 capa seleccionada */}
+          {selectedLayerIds.size > 1 && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-xs"
+              title="Combinar capas seleccionadas en una sola"
+              onClick={async () => {
+                await mergeLayers(Array.from(selectedLayerIds));
+                setSelectedLayerIds(new Set());
+              }}
+            >
+              <GitMerge size={12} /> Merge
+            </Button>
+          )}
           <Button
             size="sm"
             variant="default"
@@ -109,10 +131,64 @@ export function LayersPanel() {
         {orderedLayers.map((layer) => (
           <div
             key={layer.id}
+            draggable
+            onDragStart={(e) => {
+              setDraggingId(layer.id);
+              e.dataTransfer.effectAllowed = "move";
+            }}
+            onDragEnd={() => {
+              setDraggingId(null);
+              setDragOverId(null);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              setDragOverId(layer.id);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (draggingId && draggingId !== layer.id) {
+                // Convertir display index (orderedLayers, top→bottom) a
+                // project.layers index (bottom→top).
+                const dragDisplayIdx = orderedLayers.findIndex((l) => l.id === draggingId);
+                const dropDisplayIdx = orderedLayers.findIndex((l) => l.id === layer.id);
+                if (dragDisplayIdx >= 0 && dropDisplayIdx >= 0) {
+                  // project.layers está al revés: el índice 0 = bottom = último en orderedLayers
+                  const projectIdx = orderedLayers.length - 1 - dropDisplayIdx;
+                  moveLayerToIndex(draggingId, projectIdx);
+                }
+              }
+              setDraggingId(null);
+              setDragOverId(null);
+            }}
             className={`border-b border-border text-xs cursor-pointer hover:bg-muted/50 ${
               project.currentLayerId === layer.id ? "bg-primary/20" : ""
-            }`}
-            onClick={() => selectLayer(layer.id)}
+            } ${
+              dragOverId === layer.id && draggingId !== layer.id ? "border-t-2 border-t-primary" : ""
+            } ${draggingId === layer.id ? "opacity-50" : ""}`}
+            onClick={(e) => {
+              selectLayer(layer.id);
+              // Multi-selección: Shift=rango, Ctrl=toggle, click=único
+              if (e.shiftKey) {
+                const idx = orderedLayers.findIndex((l) => l.id === layer.id);
+                const anchorIdx = orderedLayers.findIndex((l) => l.id === Array.from(selectedLayerIds)[0]);
+                if (anchorIdx >= 0) {
+                  const start = Math.min(idx, anchorIdx);
+                  const end = Math.max(idx, anchorIdx);
+                  const range = orderedLayers.slice(start, end + 1).map((l) => l.id);
+                  setSelectedLayerIds(new Set(range));
+                  return;
+                }
+              }
+              if (e.ctrlKey || e.metaKey) {
+                const newSet = new Set(selectedLayerIds);
+                if (newSet.has(layer.id)) newSet.delete(layer.id);
+                else newSet.add(layer.id);
+                setSelectedLayerIds(newSet);
+              } else {
+                setSelectedLayerIds(new Set([layer.id]));
+              }
+            }}
           >
             <div className="flex items-center gap-1 p-2">
             <button

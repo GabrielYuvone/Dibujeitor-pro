@@ -152,6 +152,11 @@ interface AppState {
   toggleLayerLocked: (id: ID) => void;
   setLayerOpacity: (id: ID, opacity: number) => void;
   moveLayer: (id: ID, dir: "up" | "down") => void;
+  // Mover una capa a una posición específica (para drag-and-drop reorder)
+  moveLayerToIndex: (id: ID, targetIndex: number) => void;
+  // Merge de capas: compone los drawings de las capas seleccionadas en
+  // una sola capa (la de más abajo), y borra las demás.
+  mergeLayers: (layerIds: ID[]) => Promise<void>;
   duplicateLayer: (id: ID) => void;
   setLayerLoop: (id: ID, range: { start: number; end: number; count: number } | null) => void;
 
@@ -729,6 +734,118 @@ export const useStore = create<AppState>((set, get) => ({
       if (target < 0 || target >= layers.length) return p;
       [layers[idx], layers[target]] = [layers[target], layers[idx]];
       return { ...p, layers };
+    }));
+  },
+
+  moveLayerToIndex: (id, targetIndex) => {
+    const state = get();
+    if (!state.project) return;
+    get().pushProjectSnapshot();
+    set(updateProject(state, (p) => {
+      const layers = [...p.layers];
+      const idx = layers.findIndex((l) => l.id === id);
+      if (idx < 0 || targetIndex < 0 || targetIndex >= layers.length) return p;
+      if (idx === targetIndex) return p;
+      // Sacar la capa de su posición y insertarla en targetIndex
+      const [layer] = layers.splice(idx, 1);
+      layers.splice(targetIndex, 0, layer);
+      return { ...p, layers };
+    }));
+  },
+
+  mergeLayers: async (layerIds) => {
+    const state = get();
+    if (!state.project) return;
+    const proj = state.project;
+    // Encontrar las capas seleccionadas en el orden del array project.layers
+    // (de abajo hacia arriba). La de más abajo es la "base" — se queda con
+    // el contenido mergeado. Las demás se borran.
+    const selectedLayers = proj.layers.filter((l) => layerIds.includes(l.id));
+    if (selectedLayers.length < 2) return;
+
+    get().pushProjectSnapshot();
+
+    // La capa base es la PRIMERA en project.layers (más abajo en el z-order)
+    const baseLayer = selectedLayers[0];
+    const otherLayers = selectedLayers.slice(1);
+
+    // Para cada celda de la capa base, componer los drawings de todas
+    // las capas seleccionadas en ese frame range.
+    const newDrawings = { ...proj.drawings };
+    const mergedCells: typeof baseLayer.cells = [];
+
+    for (const baseCell of baseLayer.cells) {
+      // Crear canvas para componer
+      const canvas = document.createElement("canvas");
+      canvas.width = proj.settings.width;
+      canvas.height = proj.settings.height;
+      const ctx = canvas.getContext("2d")!;
+
+      // Dibujar cada capa seleccionada (de abajo hacia arriba) en el
+      // startFrame de esta celda
+      for (const layer of selectedLayers) {
+        if (!layer.visible) continue;
+        const cell = layer.cells.find(
+          (c) => baseCell.startFrame >= c.startFrame && baseCell.startFrame < c.startFrame + c.duration
+        );
+        if (!cell || !cell.drawingId) continue;
+        const drawing = proj.drawings[cell.drawingId];
+        if (!drawing) continue;
+        // Cargar el drawing como imagen
+        const img = await new Promise<HTMLImageElement | null>((resolve) => {
+          const i = new Image();
+          i.onload = () => resolve(i);
+          i.onerror = () => resolve(null);
+          i.src = drawing.dataUrl;
+        });
+        if (img) {
+          ctx.globalAlpha = layer.opacity;
+          ctx.drawImage(img, 0, 0, drawing.width, drawing.height);
+        }
+      }
+      ctx.globalAlpha = 1;
+
+      const dataUrl = canvas.toDataURL("image/png");
+      const drawingId = genId("draw");
+      newDrawings[drawingId] = {
+        id: drawingId,
+        name: `Merged ${baseCell.startFrame}`,
+        dataUrl,
+        width: proj.settings.width,
+        height: proj.settings.height,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      mergedCells.push({
+        ...baseCell,
+        id: genId("cell"),
+        drawingId,
+      });
+    }
+
+    // Pre-cachear los nuevos drawings
+    try {
+      const { preloadImage } = await import("./useDrawingEngine");
+      for (const cell of mergedCells) {
+        if (cell.drawingId) {
+          const d = newDrawings[cell.drawingId];
+          if (d) await preloadImage(cell.drawingId, d.dataUrl);
+        }
+      }
+    } catch (_) {}
+
+    // Actualizar el proyecto: reemplazar las cells de la capa base,
+    // borrar las otras capas, limpiar drawings huérfanos.
+    set(updateProject(get(), (p) => {
+      const remainingLayers = p.layers.filter((l) => !otherLayers.some((ol) => ol.id === l.id));
+      const updatedLayers = remainingLayers.map((l) => {
+        if (l.id === baseLayer.id) {
+          return { ...l, cells: mergedCells };
+        }
+        return l;
+      });
+      return { ...p, layers: updatedLayers, drawings: newDrawings, currentLayerId: baseLayer.id };
     }));
   },
 
