@@ -553,8 +553,13 @@ export function useDrawingEngine({
       }
 
       // --- Herramientas que requieren un drawing activo ---
-      // Transform: si hay una imagen pegada flotando, la puede mover arrastrando
-      if (tool === "transform" && pastedImageRef.current) {
+      // Si hay una imagen pegada flotando (después de Ctrl+V), permitir
+      // arrastrarla para moverla a la posición deseada ANTES de confirmarla.
+      // Antes solo funcionaba con el tool "transform" — el usuario tenía
+      // que cambiar de tool, lo cual era contraintuitivo. Ahora también
+      // funciona con "selection" (la herramienta con la que normalmente
+      // se copió y pegó la figura).
+      if (pastedImageRef.current && (tool === "transform" || tool === "selection")) {
         const pt = getCanvasPoint(e.clientX, e.clientY);
         if (!pt) return;
         isPanningRef.current = false;
