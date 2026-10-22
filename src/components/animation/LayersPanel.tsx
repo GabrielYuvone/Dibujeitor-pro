@@ -21,6 +21,7 @@ import {
   Repeat,
   ChevronRight,
   GitMerge,
+  GripVertical,
 } from "lucide-react";
 import type { LayerType } from "@/lib/animation/types";
 
@@ -161,11 +162,15 @@ export function LayersPanel() {
               setDraggingId(null);
               setDragOverId(null);
             }}
-            className={`border-b border-border text-xs cursor-pointer hover:bg-muted/50 ${
-              project.currentLayerId === layer.id ? "bg-primary/20" : ""
+            className={`group border-b border-border text-xs cursor-pointer transition-colors ${
+              selectedLayerIds.has(layer.id)
+                ? "bg-amber-500/15 border-l-2 border-l-amber-500"
+                : project.currentLayerId === layer.id
+                ? "bg-primary/20"
+                : "hover:bg-muted/50"
             } ${
               dragOverId === layer.id && draggingId !== layer.id ? "border-t-2 border-t-primary" : ""
-            } ${draggingId === layer.id ? "opacity-50" : ""}`}
+            } ${draggingId === layer.id ? "opacity-40" : ""}`}
             onClick={(e) => {
               selectLayer(layer.id);
               // Multi-selección: Shift=rango, Ctrl=toggle, click=único
@@ -191,6 +196,14 @@ export function LayersPanel() {
             }}
           >
             <div className="flex items-center gap-1 p-2">
+            {/* Grip handle — puntitos para agarrar y arrastrar. Visible
+                siempre (semi-transparente, opaco al hover del grupo). */}
+            <span
+              className="cursor-grab active:cursor-grabbing text-muted-foreground/40 group-hover:text-muted-foreground transition-colors flex-shrink-0"
+              title="Arrastrá para reordenar"
+            >
+              <GripVertical size={14} />
+            </span>
             <button
               className={`p-1.5 rounded transition-colors ${
                 layer.visible
