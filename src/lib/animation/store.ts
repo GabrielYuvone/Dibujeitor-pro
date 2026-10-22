@@ -191,6 +191,10 @@ interface AppState {
 
   // Cells / drawings
   ensureDrawingForCell: (layerId: ID, frame: number) => Promise<ID>;
+  // Borrar todo el bitmap del drawing de la capa+frame actual. Útil para
+  // "limpiar el canvas" sin tener que borrar a mano. Se accede con
+  // doble-click en la goma del Toolbar. Es deshacerable (pushProjectSnapshot).
+  clearActiveDrawing: () => Promise<void>;
   setCellDrawing: (layerId: ID, frame: number, drawingId: ID | null) => void;
   extendCell: (layerId: ID, frame: number, delta: number) => void;
   setCellDuration: (layerId: ID, cellId: ID, newDuration: number) => void;
@@ -1015,6 +1019,61 @@ export const useStore = create<AppState>((set, get) => ({
     }));
 
     return drawingId;
+  },
+
+  clearActiveDrawing: async () => {
+    const state = get();
+    if (!state.project) return;
+    const proj = state.project;
+    const layer = proj.layers.find((l) => l.id === proj.currentLayerId);
+    if (!layer) return;
+    const cell = layer.cells.find(
+      (c) => proj.currentFrame >= c.startFrame && proj.currentFrame < c.startFrame + c.duration
+    );
+    if (!cell || !cell.drawingId) return;
+    const drawing = proj.drawings[cell.drawingId];
+    if (!drawing) return;
+    // Extraer IDs a variables locales para que TypeScript sepa que son
+    // no-null dentro del callback del set (que es un closure distinto).
+    const drawingId = cell.drawingId;
+
+    // Snapshot ANTES de mutar (deshacerable con Ctrl+Z)
+    get().pushProjectSnapshot();
+
+    // Crear canvas vacío con las dimensiones actuales del drawing
+    // (que pueden ser más grandes que project.settings si fue expandido)
+    const emptyCanvas = document.createElement("canvas");
+    emptyCanvas.width = drawing.width;
+    emptyCanvas.height = drawing.height;
+    const emptyDataUrl = emptyCanvas.toDataURL("image/png");
+
+    // Pre-cachear la imagen vacía para que el rendering sea síncrono
+    try {
+      const { preloadImage } = await import("./useDrawingEngine");
+      await preloadImage(drawingId, emptyDataUrl);
+    } catch (_) {
+      // ignore
+    }
+
+    const now = Date.now();
+    set((s) => {
+      if (!s.project) return {};
+      return {
+        project: {
+          ...s.project,
+          drawings: {
+            ...s.project.drawings,
+            [drawingId]: {
+              ...drawing,
+              dataUrl: emptyDataUrl,
+              updatedAt: now,
+            },
+          },
+          dirty: true,
+          updatedAt: now,
+        },
+      };
+    });
   },
 
   setCellDrawing: (layerId, frame, drawingId) => {

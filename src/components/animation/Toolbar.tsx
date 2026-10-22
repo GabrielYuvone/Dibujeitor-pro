@@ -72,8 +72,18 @@ export function Toolbar() {
           {TOOLS.map((tool) => (
             <button
               key={tool.id}
-              title={`${tool.label} (${tool.shortcut})`}
+              title={`${tool.label} (${tool.shortcut})${tool.id === "eraser" ? " · doble-click = borrar TODO el canvas de la capa activa" : ""}`}
               onClick={() => setTool(tool.id)}
+              onDoubleClick={(e) => {
+                if (tool.id === "eraser") {
+                  e.preventDefault();
+                  // Doble-click en la goma: borrar TODO el bitmap del
+                  // drawing de la capa+frame actual. Es deshacerable.
+                  if (confirm("¿Borrar todo el contenido de la capa activa en este frame?")) {
+                    useStore.getState().clearActiveDrawing();
+                  }
+                }
+              }}
               className={`flex flex-col items-center justify-center p-2 rounded-md text-[10px] transition-colors ${
                 currentTool === tool.id
                   ? "bg-primary text-primary-foreground"
