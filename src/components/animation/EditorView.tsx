@@ -3,7 +3,6 @@
 import React, { useEffect, useState } from "react";
 import { useStore } from "@/lib/animation/store";
 import { usePlaybackEngine } from "@/lib/animation/useDrawingEngine";
-import { totalFrames } from "@/lib/animation/utils";
 import {
   Menubar,
   MenubarContent,
@@ -172,8 +171,13 @@ export function EditorView() {
         case "n":
           e.preventDefault();
           if (project.currentLayerId) {
-            // Agregar DESPUÉS del último frame existente (igual que el botón +)
-            const nextFrameIdx = totalFrames(project.layers);
+            // Agregar DESPUÉS del último frame de la CAPA SELECCIONADA
+            // (igual que el botón + — no el máximo global)
+            const layer = project.layers.find((l) => l.id === project.currentLayerId);
+            const lastFrameInLayer = layer && layer.cells.length > 0
+              ? Math.max(...layer.cells.map((c) => c.startFrame + c.duration))
+              : 0;
+            const nextFrameIdx = lastFrameInLayer;
             useStore.getState().ensureDrawingForCell(project.currentLayerId, nextFrameIdx).then(() => {
               useStore.getState().gotoFrame(nextFrameIdx);
             });

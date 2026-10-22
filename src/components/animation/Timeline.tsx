@@ -86,10 +86,15 @@ export function Timeline() {
 
   const handleAddFrame = async () => {
     if (!project.currentLayerId) return;
-    // Siempre agregar DESPUÉS del último frame existente (no en el frame
-    // actual+1). Si el playhead está en el medio, no queremos interrumpir
-    // la animación — el nuevo frame va al final de la línea de tiempo.
-    const nextFrameIdx = totalFrames(project.layers);
+    // Agregar DESPUÉS del último frame de la CAPA SELECCIONADA (no el
+    // máximo global entre todas las capas). Esto permite que cada capa
+    // tenga su propia longitud — ej. un fondo corto no fuerza al
+    // personaje a tener su nuevo frame lejos del último del personaje.
+    const layer = project.layers.find((l) => l.id === project.currentLayerId);
+    const lastFrameInLayer = layer && layer.cells.length > 0
+      ? Math.max(...layer.cells.map((c) => c.startFrame + c.duration))
+      : 0;
+    const nextFrameIdx = lastFrameInLayer;
     await ensureDrawing(project.currentLayerId, nextFrameIdx);
     gotoFrame(nextFrameIdx);
   };
