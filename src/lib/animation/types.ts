@@ -295,6 +295,11 @@ export interface AnimationProject {
   lastSavedAt?: number;
   dirty: boolean;
   templateInstructions?: string;
+  // Marcadores de formato para importar/exportar como archivo. __format
+  // identifica que el JSON es un proyecto de Dibujeitor; __version permite
+  // migrar el schema en el futuro sin romper archivos viejos.
+  __format?: "dibujeitor-project";
+  __version?: number;
 }
 
 // ---------------------------------------------------------------------------

@@ -107,6 +107,13 @@ interface AppState {
   deleteProject: (id: string) => Promise<void>;
   closeProject: () => void;
   exportProject: () => AnimationProject | null;
+  // Guardar/cargar proyecto como archivo en la PC del usuario.
+  // Formato: JSON con toda la estructura del AnimationProject (layers,
+  // cells, drawings como dataUrl, audioClips, etc.). Es totalmente
+  // serializable — no hay campos no-JSON-safe. Permite compartir el
+  // proyecto como archivo.
+  saveProjectToFile: () => Promise<void>;
+  openProjectFromFile: (file: File) => Promise<void>;
 
   // Tools
   setTool: (tool: ToolId) => void;
@@ -443,6 +450,76 @@ export const useStore = create<AppState>((set, get) => ({
   closeProject: () => set({ project: null }),
 
   exportProject: () => get().project,
+
+  saveProjectToFile: async () => {
+    const project = get().project;
+    if (!project) return;
+    // Serializar el proyecto completo a JSON. Todos los campos son
+    // JSON-safe (drawings/audioClips son dataUrl strings base64).
+    // No incluimos `dirty` ni `lastSavedAt` porque son estado interno
+    // de sincronización con IndexedDB, no del proyecto en sí.
+    const exportable = {
+      ...project,
+      dirty: false,
+      lastSavedAt: undefined,
+      // Marcar el formato para que el loader pueda validar y migrar
+      __format: "dibujeitor-project",
+      __version: 1,
+    };
+    const json = JSON.stringify(exportable, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    // Sanitizar el nombre del archivo: solo alfanum, guiones, guion bajo.
+    const safeName = project.name.replace(/[^a-zA-Z0-9_-]/g, "_") || "proyecto";
+    a.download = `${safeName}.dibujeitor.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  },
+
+  openProjectFromFile: async (file) => {
+    // Leer el archivo como texto y parsear como JSON.
+    const text = await file.text();
+    let parsed: AnimationProject;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      alert(`No se pudo leer el archivo: no es JSON válido. Detalle: ${(e as Error).message}`);
+      return;
+    }
+    // Validar que tenga los campos mínimos de un AnimationProject.
+    if (!parsed || typeof parsed !== "object") {
+      alert("Archivo inválido: no es un objeto JSON.");
+      return;
+    }
+    if (!parsed.__format || parsed.__format !== "dibujeitor-project") {
+      // No es nuestro formato, pero podríamos aceptar si tiene los campos
+      // mínimos. Por ahora, exigimos el formato.
+      if (!parsed.layers || !parsed.drawings || !parsed.settings) {
+        alert("Archivo inválido: no parece ser un proyecto de Dibujeitor. Debe tener layers, drawings y settings.");
+        return;
+      }
+      // OK, asumimos que es un proyecto válido sin el __format.
+    }
+    // Regenerar el ID para evitar colisiones con proyectos existentes en
+    // IndexedDB (por si el usuario ya tiene un proyecto con el mismo ID).
+    parsed.id = crypto.randomUUID();
+    parsed.name = `${parsed.name} (importado)`;
+    parsed.createdAt = Date.now();
+    parsed.updatedAt = Date.now();
+    parsed.dirty = false;
+    parsed.lastSavedAt = Date.now();
+    // Guardar en IndexedDB para que aparezca en la galería de proyectos.
+    await saveProjectToDb(parsed);
+    // Abrir el proyecto en el editor.
+    set({
+      project: parsed,
+      canvasView: { zoom: 1, panX: 0, panY: 0, rotation: 0 },
+    });
+  },
 
   // -------------------------------------------------------------------------
   // Tools

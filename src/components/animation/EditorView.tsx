@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { useStore } from "@/lib/animation/store";
 import { usePlaybackEngine } from "@/lib/animation/useDrawingEngine";
 import {
@@ -25,6 +25,8 @@ import {
   Eye,
   Settings2,
   Folder,
+  FolderOpen,
+  Upload,
   HelpCircle,
   Maximize2,
   ChevronLeft,
@@ -70,6 +72,9 @@ export function EditorView() {
   // dejando solo el canvas en grande. Se puede seguir dibujando y usando
   // flechas para navegar frames. Toggle con F1.
   const [fullscreenCanvas, setFullscreenCanvas] = useState(false);
+  // Ref al input file hidden para "Abrir desde archivo…". Triggered
+  // desde el menubar (porque los MenubarItem no pueden contener inputs).
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const rightPanelVisible = useStore((s) => s.rightPanelVisible);
   const setRightPanelVisible = useStore((s) => s.setRightPanelVisible);
 
@@ -227,8 +232,24 @@ export function EditorView() {
             <MenubarItem onClick={() => saveCurrent()}>
               <Save className="mr-2" size={14} /> Guardar
             </MenubarItem>
+            {/* Guardar proyecto como archivo en la PC del usuario.
+                El archivo .dibujeitor.json contiene TODO el proyecto
+                (capas, frames, drawings como dataUrl, audioClips, etc.)
+                y se puede compartir con otros usuarios. */}
+            <MenubarItem onClick={() => useStore.getState().saveProjectToFile()}>
+              <Folder className="mr-2" size={14} /> Guardar como archivo…
+              <span className="ml-auto text-[10px] opacity-60">.json</span>
+            </MenubarItem>
+            {/* Abrir proyecto desde un archivo .dibujeitor.json. Regenera
+                el ID para no colisionar con proyectos existentes en la
+                IndexedDB local del usuario. */}
+            <MenubarItem onClick={() => fileInputRef.current?.click()}>
+              <FolderOpen className="mr-2" size={14} /> Abrir desde archivo…
+              <span className="ml-auto text-[10px] opacity-60">.json</span>
+            </MenubarItem>
+            <MenubarSeparator />
             <MenubarItem onClick={() => setExportOpen(true)}>
-              <Download className="mr-2" size={14} /> Exportar…
+              <Download className="mr-2" size={14} /> Exportar video/imagen…
             </MenubarItem>
           </MenubarContent>
         </MenubarMenu>
@@ -410,6 +431,22 @@ export function EditorView() {
       {/* Modals */}
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
+      {/* Input file hidden para "Abrir desde archivo…". El menubar dispara
+          el click via fileInputRef. El accept=.json filtra archivos no válidos. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json,.dibujeitor.json,application/json"
+        style={{ display: "none" }}
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            await useStore.getState().openProjectFromFile(file);
+          }
+          // Reset para poder abrir el mismo archivo dos veces seguidas
+          e.target.value = "";
+        }}
+      />
     </div>
   );
 }
