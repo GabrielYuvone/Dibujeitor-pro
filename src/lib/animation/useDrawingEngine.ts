@@ -352,7 +352,11 @@ export function useDrawingEngine({
         cached.naturalWidth > 0 &&
         cached.dataset.dataUrl === drawing.dataUrl
       ) {
-        ctx.drawImage(cached, 0, 0, canvas.width, canvas.height);
+        // Dibujar a tamaño NATURAL del drawing — si el bitmap es más
+        // grande que el canvas (por expansión "infinita"), drawImage
+        // con canvas.width/height lo estiraría. Usamos las dimensiones
+        // del drawing para preservar 1:1.
+        ctx.drawImage(cached, 0, 0, drawing.width, drawing.height);
         return;
       }
 
@@ -361,7 +365,7 @@ export function useDrawingEngine({
         await preloadImage(drawingId, drawing.dataUrl);
         const img = getCachedImage(drawingId);
         if (img && img.complete) {
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, drawing.width, drawing.height);
         }
       } catch (e) {
         console.error("Error cargando dibujo:", e);
@@ -678,6 +682,35 @@ export function useDrawingEngine({
 
       const pt = getCanvasPoint(e.clientX, e.clientY);
       if (!pt) return;
+
+      // EXPANSIÓN "INFINITA" DEL BITMAP: si el click cae fuera del bitmap
+      // del drawing (porque la capa está movida con draft y excede el
+      // límite), expandimos el bitmap para incluir el click. Así el
+      // usuario puede "panear la hoja" y seguir dibujando como si fuera
+      // infinito. La expansión ajusta el origen del bitmap y el draft
+      // para que la capa no salte visualmente.
+      const drawing = drawingId ? activeProjectRef.current?.drawings[drawingId] : null;
+      if (drawing && (pt.x < 0 || pt.y < 0 || pt.x >= drawing.width || pt.y >= drawing.height)) {
+        const layerIdForExpand = proj.currentLayerId;
+        const expandResult = await useStore.getState().ensureDrawingBounds(drawingId!, pt.x, pt.y);
+        // Recargar el drawing expandido en el canvas
+        await loadDrawingIntoCanvas(drawingId);
+        // Ajustar la posición del click al nuevo sistema de coords
+        pt.x += expandResult.offsetX;
+        pt.y += expandResult.offsetY;
+        // Ajustar el draft para que la capa no salte
+        if (layerIdForExpand) {
+          const currentDraft = useStore.getState().layerDrafts[layerIdForExpand];
+          if (currentDraft && (expandResult.offsetX !== 0 || expandResult.offsetY !== 0)) {
+            useStore.getState().setLayerDraft(layerIdForExpand, {
+              offsetX: currentDraft.offsetX - expandResult.offsetX,
+              offsetY: currentDraft.offsetY - expandResult.offsetY,
+              scale: currentDraft.scale,
+              rotation: currentDraft.rotation,
+            });
+          }
+        }
+      }
 
       // IMPORTANTE: setear el estado de dibujo INMEDIATAMENTE
       // y RESETEAR el smoother para que no quede con la posición del

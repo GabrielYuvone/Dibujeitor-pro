@@ -120,6 +120,24 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   // ignoraba `layer.visible` → el ojo (eye toggle) no funcionaba para la
   // capa actualmente seleccionada, solo para las demás.
   const activeLayerVisible = activeLayerForTransform ? activeLayerForTransform.visible : true;
+  // Dimensiones del drawing activo: si el bitmap fue expandido (porque el
+  // usuario dibujó más allá de los límites al mover la capa), usamos las
+  // dimensiones reales del drawing. Si no hay drawing, fallback a project
+  // settings. Esto hace que el drawingCanvas sea más grande que el canvas
+  // visible — el usuario puede panear (via draft transform) para ver las
+  // distintas partes del bitmap expandido.
+  const activeCellForDims = activeLayerForTransform && project
+    ? findCellAtFrame(
+        activeLayerForTransform.cells,
+        project.currentFrame,
+        activeLayerForTransform.loopRange
+      )
+    : null;
+  const activeDrawingForDims = activeCellForDims?.drawingId && project
+    ? project.drawings[activeCellForDims.drawingId]
+    : null;
+  const drawingCanvasW = activeDrawingForDims?.width ?? width;
+  const drawingCanvasH = activeDrawingForDims?.height ?? height;
 
   // ---------------------------------------------------------------------------
   // Pintar fondo
@@ -235,14 +253,22 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
         if (hasTransform) {
           // El pivot es el centro del canvas — el transform se aplica
           // alrededor de ese punto, así un scale mantiene el centro.
+          // Importante: el drawImage usa las dimensiones NATURALES del
+          // drawing (drawing.width/height), no las del composited canvas
+          // (c.width/c.height) — así si el bitmap fue expandido (por
+          // dibujar más allá de los límites), se muestra a tamaño real y
+          // se clipa al composited automáticamente.
           ctx.save();
           ctx.translate(c.width / 2 + t.offsetX, c.height / 2 + t.offsetY);
           if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
           if (t.scale !== 1) ctx.scale(t.scale, t.scale);
-          ctx.drawImage(img, -c.width / 2, -c.height / 2, c.width, c.height);
+          ctx.drawImage(img, -drawing.width / 2, -drawing.height / 2, drawing.width, drawing.height);
           ctx.restore();
         } else {
-          ctx.drawImage(img, 0, 0, c.width, c.height);
+          // Sin transform — drawImage a tamaño natural. Si el bitmap es
+          // más grande que project.settings, se clipa al composited canvas
+          // automáticamente (que es de tamaño project.settings).
+          ctx.drawImage(img, 0, 0, drawing.width, drawing.height);
         }
       }
     }
@@ -703,15 +729,18 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           className="absolute inset-0 pointer-events-none"
           style={{ width, height }}
         />
-        {/* Drawing canvas (editable, solo en edit mode sin playback) */}
+        {/* Drawing canvas (editable, solo en edit mode sin playback).
+            Dimensiones = las del drawing activo (puede ser más grande que
+            project.settings si el bitmap fue expandido al dibujar más allá
+            de los límites moviendo la capa). */}
         <canvas
           ref={drawingCanvasRef}
-          width={width}
-          height={height}
+          width={drawingCanvasW}
+          height={drawingCanvasH}
           className="absolute inset-0 canvas-surface"
           style={{
-            width,
-            height,
+            width: drawingCanvasW,
+            height: drawingCanvasH,
             // Escondemos el drawingCanvas si estamos compositando (playback/
             // preview) O si la capa activa está oculta (eye toggle).
             visibility: isCompositing || !activeLayerVisible ? "hidden" : "visible",

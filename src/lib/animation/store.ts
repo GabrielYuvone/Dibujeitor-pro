@@ -177,6 +177,18 @@ interface AppState {
   clearCellSelection: () => void;
   deleteSelectedCells: () => void;
 
+  // Expandir el bitmap de un drawing para incluir una posición (x, y)
+  // que está fuera de los bounds actuales. Retorna cuánto se movió el
+  // origen del bitmap (offsetX, offsetY) — quien llama debe ajustar el
+  // draft offset y la posición del click en consecuencia.
+  // Si no hace falta expandir, retorna {offsetX: 0, offsetY: 0}.
+  ensureDrawingBounds: (
+    drawingId: ID,
+    x: number,
+    y: number,
+    margin?: number
+  ) => Promise<{ offsetX: number; offsetY: number }>;
+
   // Cells / drawings
   ensureDrawingForCell: (layerId: ID, frame: number) => Promise<ID>;
   setCellDrawing: (layerId: ID, frame: number, drawingId: ID | null) => void;
@@ -858,6 +870,86 @@ export const useStore = create<AppState>((set, get) => ({
   // -------------------------------------------------------------------------
   // Cells / drawings
   // -------------------------------------------------------------------------
+
+  ensureDrawingBounds: async (drawingId, x, y, margin = 100) => {
+    const state = get();
+    if (!state.project) return { offsetX: 0, offsetY: 0 };
+    const drawing = state.project.drawings[drawingId];
+    if (!drawing) return { offsetX: 0, offsetY: 0 };
+
+    // Calcular cuánto hay que expandir en cada dirección para que (x, y)
+    // quede dentro del bitmap, con un margen para no expandir en cada click.
+    const expandLeft = x < 0 ? Math.ceil(-x + margin) : 0;
+    const expandTop = y < 0 ? Math.ceil(-y + margin) : 0;
+    const expandRight = x >= drawing.width ? Math.ceil(x - drawing.width + margin) : 0;
+    const expandBottom = y >= drawing.height ? Math.ceil(y - drawing.height + margin) : 0;
+
+    if (expandLeft === 0 && expandTop === 0 && expandRight === 0 && expandBottom === 0) {
+      return { offsetX: 0, offsetY: 0 };
+    }
+
+    // El origen del bitmap se mueve: lo que era (0, 0) ahora está en
+    // (expandLeft, expandTop) del nuevo bitmap. Esto es lo que el caller
+    // necesita para ajustar el draft (restar expandLeft/Top) y el click
+    // (sumar expandLeft/Top).
+    const offsetX = expandLeft;
+    const offsetY = expandTop;
+    const newW = drawing.width + expandLeft + expandRight;
+    const newH = drawing.height + expandTop + expandBottom;
+
+    // Crear nuevo canvas con las nuevas dimensiones
+    const newCanvas = document.createElement("canvas");
+    newCanvas.width = newW;
+    newCanvas.height = newH;
+    const newCtx = newCanvas.getContext("2d");
+    if (!newCtx) return { offsetX: 0, offsetY: 0 };
+
+    // Cargar la imagen actual y dibujarla en (offsetX, offsetY) del nuevo canvas
+    const img = await new Promise<HTMLImageElement | null>((resolve) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => resolve(null);
+      i.src = drawing.dataUrl;
+    });
+    if (img) {
+      newCtx.drawImage(img, offsetX, offsetY);
+    }
+
+    const newDataUrl = newCanvas.toDataURL("image/png");
+    const now = Date.now();
+
+    // Pre-cachear la nueva imagen para que el rendering sea síncrono
+    try {
+      const { preloadImage } = await import("./useDrawingEngine");
+      await preloadImage(drawingId, newDataUrl);
+    } catch (_) {
+      // ignore
+    }
+
+    // Actualizar el drawing con las nuevas dimensiones y dataUrl
+    set((s) => {
+      if (!s.project) return {};
+      return {
+        project: {
+          ...s.project,
+          drawings: {
+            ...s.project.drawings,
+            [drawingId]: {
+              ...drawing,
+              dataUrl: newDataUrl,
+              width: newW,
+              height: newH,
+              updatedAt: now,
+            },
+          },
+          dirty: true,
+          updatedAt: now,
+        },
+      };
+    });
+
+    return { offsetX, offsetY };
+  },
 
   ensureDrawingForCell: async (layerId, frame) => {
     const state = get();
