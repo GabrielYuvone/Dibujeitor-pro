@@ -83,7 +83,10 @@ export function Timeline() {
 
   const handleAddFrame = async () => {
     if (!project.currentLayerId) return;
-    const nextFrameIdx = project.currentFrame + 1;
+    // Siempre agregar DESPUÉS del último frame existente (no en el frame
+    // actual+1). Si el playhead está en el medio, no queremos interrumpir
+    // la animación — el nuevo frame va al final de la línea de tiempo.
+    const nextFrameIdx = totalFrames(project.layers);
     await ensureDrawing(project.currentLayerId, nextFrameIdx);
     gotoFrame(nextFrameIdx);
   };
@@ -432,7 +435,7 @@ export function Timeline() {
                   return (
                     <div
                       key={cell.id}
-                      className={`absolute top-1 bottom-1 rounded-sm border flex items-center px-1 overflow-hidden cursor-pointer ${
+                      className={`absolute top-1 bottom-1 rounded-sm border flex items-center px-1 overflow-hidden cursor-grab active:cursor-grabbing ${
                         isCurrent
                           ? "border-primary ring-1 ring-primary"
                           : "border-border"
@@ -445,6 +448,34 @@ export function Timeline() {
                         e.stopPropagation();
                         useStore.getState().selectLayer(layer.id);
                         gotoFrame(cell.startFrame);
+                      }}
+                      onPointerDown={(e) => {
+                        // Arrastrar el cell desde el cuerpo para moverlo
+                        // a otra posición del timeline. El resize handle
+                        // del borde derecho tiene su propio onPointerDown
+                        // que frena la propagación (e.stopPropagation()).
+                        if (e.ctrlKey || e.metaKey) return;
+                        e.stopPropagation();
+                        const startX = e.clientX;
+                        const startCellStart = cell.startFrame;
+                        const cellId = cell.id;
+                        const layerId = layer.id;
+                        let moved = false;
+                        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                        const onMove = (ev: PointerEvent) => {
+                          const dx = ev.clientX - startX;
+                          if (Math.abs(dx) < 4 && !moved) return;
+                          moved = true;
+                          const framesDelta = Math.round(dx / frameWidth);
+                          const newStart = Math.max(0, startCellStart + framesDelta);
+                          useStore.getState().moveCell(layerId, cellId, newStart);
+                        };
+                        const onUp = () => {
+                          window.removeEventListener("pointermove", onMove);
+                          window.removeEventListener("pointerup", onUp);
+                        };
+                        window.addEventListener("pointermove", onMove);
+                        window.addEventListener("pointerup", onUp);
                       }}
                     >
                       {drawing?.thumbnail ? (

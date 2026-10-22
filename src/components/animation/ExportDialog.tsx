@@ -74,11 +74,29 @@ export function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
 
       if (exportOptions.format === "mp4") {
         setStage("rendering");
-        const blob = await exportMp4(project, exportOptions, (p, s) => {
-          setStage(s);
-          setProgress(p);
-        });
-        downloadBlob(blob, `${baseName}.mp4`);
+        try {
+          const blob = await exportMp4(project, exportOptions, (p, s) => {
+            setStage(s);
+            setProgress(p);
+          });
+          downloadBlob(blob, `${baseName}.mp4`);
+        } catch (mp4Err) {
+          // Fallback automático a WebM: si ffmpeg-core no carga (firewall,
+          // offline, etc.) o el encoding falla, ofrecemos WebM que no
+          // requiere ffmpeg.
+          console.warn("MP4 export failed, falling back to WebM:", mp4Err);
+          setStage("");
+          setProgress(0);
+          const webmBlob = await exportWebM(project, exportOptions, (p) => {
+            setProgress(p);
+          });
+          downloadBlob(webmBlob, `${baseName}.webm`);
+          setError(
+            `No se pudo exportar MP4 (${(mp4Err as Error).message}). ` +
+            `Se exportó WebM como alternativa. WebM es soportado por la mayoría ` +
+            `de los reproductores modernos y no requiere ffmpeg.`
+          );
+        }
       } else if (exportOptions.format === "webm") {
         const blob = await exportWebM(project, exportOptions, (p) => {
           setProgress(p);

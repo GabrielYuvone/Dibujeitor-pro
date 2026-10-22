@@ -1,6 +1,19 @@
 // ============================================================================
 // videoExport.ts — Exportación a video MP4 con ffmpeg.wasm
 // ============================================================================
+//
+// Estrategia de carga de ffmpeg-core:
+// 1. Intentar primero desde el CDN (unpkg). Es lo más rápido si hay internet.
+// 2. Si el CDN falla, intentar desde `/ffmpeg/ffmpeg-core.{js,wasm}` servido
+//    localmente (misma origen). Esto requiere que los archivos estén en
+//    `public/ffmpeg/`. Si no están, se saltea al fallback.
+// 3. Si todo falla, propagate el error. El caller (exportMp4) puede decidir
+//    caer a WebM (que no necesita ffmpeg).
+//
+// IMPORTANTE: si la carga falla, `loadingPromise` se resetea a null en un
+// `catch()` para que retries posteriores funcionen (antes se quedaba
+// cacheado el rejection y todas las exportaciones siguientes fallaban
+// hasta recargar la página).
 
 "use client";
 
@@ -14,21 +27,70 @@ let ffmpegInstance: FFmpeg | null = null;
 let loadingPromise: Promise<FFmpeg> | null = null;
 
 const FFMPEG_CORE_VERSION = "0.12.6";
-const FFMPEG_CORE_BASE = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
+const FFMPEG_CORE_BASE_CDN = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
+// Misma origen — funciona en PCs sin internet o con firewall que bloquea
+// unpkg. Requiere que existan public/ffmpeg/ffmpeg-core.js y .wasm.
+const FFMPEG_CORE_BASE_LOCAL = `/ffmpeg`;
+
+async function tryLoadFFmpegFromBase(base: string): Promise<FFmpeg> {
+  const ff = new FFmpeg();
+  await ff.load({
+    coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"),
+    wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"),
+  });
+  return ff;
+}
+
+/** Verifica si un recurso HTTP existe (HEAD request, no descarga el body). */
+async function urlExists(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, { method: "HEAD" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 async function getFFmpeg(): Promise<FFmpeg> {
   if (ffmpegInstance) return ffmpegInstance;
   if (loadingPromise) return loadingPromise;
 
   loadingPromise = (async () => {
-    const ff = new FFmpeg();
-    await ff.load({
-      coreURL: await toBlobURL(`${FFMPEG_CORE_BASE}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${FFMPEG_CORE_BASE}/ffmpeg-core.wasm`, "application/wasm"),
-    });
+    let ff: FFmpeg | null = null;
+    // 1. CDN (unpkg) — la ruta principal
+    try {
+      ff = await tryLoadFFmpegFromBase(FFMPEG_CORE_BASE_CDN);
+    } catch (cdnErr) {
+      // 2. Local (same-origin /ffmpeg/) — solo si existe
+      const localJsExists = await urlExists(`${FFMPEG_CORE_BASE_LOCAL}/ffmpeg-core.js`);
+      if (localJsExists) {
+        try {
+          ff = await tryLoadFFmpegFromBase(FFMPEG_CORE_BASE_LOCAL);
+        } catch (localErr) {
+          // Continuar al throw final
+        }
+      }
+      if (!ff) {
+        // Reset loadingPromise para que retry posteriores no usen este
+        // rejection cacheado.
+        loadingPromise = null;
+        throw new Error(
+          `No se pudo cargar ffmpeg-core ni desde CDN ni desde /ffmpeg/ local. ` +
+          `Detalle CDN: ${cdnErr instanceof Error ? cdnErr.message : String(cdnErr)}. ` +
+          `Si estás offline o detrás de un firewall, descargá ffmpeg-core.js y ffmpeg-core.wasm ` +
+          `(versión ${FFMPEG_CORE_VERSION}) y copialos a public/ffmpeg/. ` +
+          `Alternativamente, exportá a WebM (no requiere ffmpeg).`
+        );
+      }
+    }
     ffmpegInstance = ff;
     return ff;
   })();
+
+  // Si la carga falla, resetear loadingPromise para permitir retries
+  loadingPromise.catch(() => {
+    if (!ffmpegInstance) loadingPromise = null;
+  });
 
   return loadingPromise;
 }

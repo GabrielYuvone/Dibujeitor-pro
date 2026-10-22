@@ -1,0 +1,1434 @@
+     1→// ============================================================================
+     2→// store.ts — Estado global con Zustand (motor de animación)
+     3→// ============================================================================
+     4→
+     5→"use client";
+     6→
+     7→import { create } from "zustand";
+     8→import type {
+     9→  AnimationProject,
+    10→  BrushSettings,
+    11→  CanvasView,
+    12→  Cell,
+    13→  Drawing,
+    14→  ExportOptions,
+    15→  ID,
+    16→  InteractiveButton,
+    17→  Layer,
+    18→  OnionSkinSettings,
+    19→  PlaybackState,
+    20→  ToolId,
+    21→  ViewMode,
+    22→  Action,
+    23→  EventHandler,
+    24→  Variable,
+    25→  Marker,
+    26→  AudioClip,
+    27→} from "./types";
+    28→import { DEFAULT_BRUSH, DEFAULT_ONION, DEFAULT_SETTINGS, createBlankProject } from "./defaults";
+    29→import { genId, totalFrames } from "./utils";
+    30→import {
+    31→  deleteProjectFromDb,
+    32→  listProjectsFromDb,
+    33→  loadProjectFromDb,
+    34→  saveProjectToDb,
+    35→  duplicateProjectInDb,
+    36→} from "./db";
+    37→
+    38→// ---------------------------------------------------------------------------
+    39→// Estado de la aplicación
+    40→// ---------------------------------------------------------------------------
+    41→
+    42→interface AppState {
+    43→  // Lista de proyectos en disco
+    44→  projects: AnimationProject[];
+    45→  projectsLoading: boolean;
+    46→
+    47→  // Proyecto abierto
+    48→  project: AnimationProject | null;
+    49→
+    50→  // Estado de UI / herramientas
+    51→  currentTool: ToolId;
+    52→  brush: BrushSettings;
+    53→  onion: OnionSkinSettings;
+    54→  playback: PlaybackState;
+    55→  canvasView: CanvasView;
+    56→  viewMode: ViewMode;
+    57→  exportOptions: ExportOptions;
+    58→
+    59→  // Estado de UI
+    60→  panelLayout: "default" | "focus";
+    61→  showGrid: boolean;
+    62→  showSafeArea: boolean;
+    63→  showRulers: boolean;
+    64→  thumbnailCache: Record<ID, string>;
+    65→  isAutosaving: boolean;
+    66→  lastAutosaveAt: number | null;
+    67→
+    68→  // Estado de dibujo y modificadores de teclado
+    69→  isDrawing: boolean;
+    70→  rightPanelVisible: boolean;
+    71→  xModifier: boolean;
+    72→  zModifier: boolean;
+    73→  toolSettings: Record<string, Partial<BrushSettings>>;
+    74→  customPalette: string[];
+    75→
+    76→  // Selección temporal (texto activo)
+    77→  drawingBuffer: HTMLCanvasElement | null;
+    78→
+    79→  // Pilas de undo/redo
+    80→  undoStack: HistoryEntry[];
+    81→  redoStack: HistoryEntry[];
+    82→  skipReloadOnHistory: boolean;
+    83→
+    84→  // Placement de imagen importada: cuando el usuario hace click en una
+    85→  // imagen de la biblioteca, se activa el modo transformación. La imagen
+    86→  // se muestra sobre el canvas con su aspect ratio original, y el usuario
+    87→  // puede moverla (drag dentro) o escalarla (drag de las puntas) antes de
+    88→  // confirmar (Enter) o cancelar (Escape).
+    89→  imagePlacement: ImagePlacement | null;
+    90→
+    91→  // Acciones
+    92→  // Projects
+    93→  refreshProjects: () => Promise<void>;
+    94→  newProject: (name: string) => Promise<AnimationProject>;
+    95→  openProject: (id: string) => Promise<void>;
+    96→  saveCurrent: () => Promise<void>;
+    97→  duplicateCurrent: (newName: string) => Promise<void>;
+    98→  deleteProject: (id: string) => Promise<void>;
+    99→  closeProject: () => void;
+   100→  exportProject: () => AnimationProject | null;
+   101→
+   102→  // Tools
+   103→  setTool: (tool: ToolId) => void;
+   104→  setBrush: (b: Partial<BrushSettings>) => void;
+   105→
+   106→  // Onion
+   107→  setOnion: (o: Partial<OnionSkinSettings>) => void;
+   108→
+   109→  // Playback
+   110→  togglePlay: () => void;
+   111→  setPlaying: (p: boolean) => void;
+   112→  setLooping: (l: boolean) => void;
+   113→  setPlaybackFps: (fps: number) => void;
+   114→  setRange: (start: number | null, end: number | null) => void;
+   115→
+   116→  // Canvas view
+   117→  setCanvasView: (v: Partial<CanvasView>) => void;
+   118→  resetCanvasView: () => void;
+   119→
+   120→  // Navigation
+   121→  gotoFrame: (frame: number) => void;
+   122→  nextFrame: () => void;
+   123→  prevFrame: () => void;
+   124→  setViewMode: (m: ViewMode) => void;
+   125→
+   126→  // Project settings
+   127→  setProjectSettings: (s: Partial<AnimationProject["settings"]>) => void;
+   128→  renameProject: (name: string) => void;
+   129→
+   130→  // Layers
+   131→  addLayer: (type: Layer["type"], name?: string) => string;
+   132→  deleteLayer: (id: ID) => void;
+   133→  selectLayer: (id: ID) => void;
+   134→  renameLayer: (id: ID, name: string) => void;
+   135→  toggleLayerVisible: (id: ID) => void;
+   136→  toggleLayerLocked: (id: ID) => void;
+   137→  setLayerOpacity: (id: ID, opacity: number) => void;
+   138→  moveLayer: (id: ID, dir: "up" | "down") => void;
+   139→  duplicateLayer: (id: ID) => void;
+   140→  setLayerLoop: (id: ID, range: { start: number; end: number; count: number } | null) => void;
+   141→
+   142→  // Cells / drawings
+   143→  ensureDrawingForCell: (layerId: ID, frame: number) => Promise<ID>;
+   144→  setCellDrawing: (layerId: ID, frame: number, drawingId: ID | null) => void;
+   145→  extendCell: (layerId: ID, frame: number, delta: number) => void;
+   146→  insertEmptyFrame: (layerId: ID, frame: number) => void;
+   147→  removeCell: (layerId: ID, cellId: ID) => void;
+   148→  duplicateCell: (layerId: ID, cellId: ID) => void;
+   149→  moveCell: (layerId: ID, cellId: ID, newFrame: number) => void;
+   150→  setCellLabel: (layerId: ID, cellId: ID, label: string) => void;
+   151→  setFrameLabel: (layerId: ID, frame: number, label: string) => void;
+   152→
+   153→  // Drawings
+   154→  addDrawing: (drawing: Drawing) => void;
+   155→  updateDrawing: (id: ID, dataUrl: string) => Promise<void>;
+   156→  deleteDrawing: (id: ID) => void;
+   157→  getDrawing: (id: ID) => Drawing | null;
+   158→
+   159→  // Markers
+   160→  addMarker: (frame: number, label: string, color: string) => void;
+   161→  deleteMarker: (id: ID) => void;
+   162→  gotoNextMarker: () => void;
+   163→  gotoPrevMarker: () => void;
+   164→
+   165→  // Audio
+   166→  addAudioClip: (clip: AudioClip) => void;
+   167→  deleteAudioClip: (id: ID) => void;
+   168→  setAudioClipStart: (id: ID, frame: number) => void;
+   169→  toggleAudioMute: (id: ID) => void;
+   170→
+   171→  // Buttons & actions
+   172→  addButton: (button: Partial<InteractiveButton>) => ID;
+   173→  updateButton: (id: ID, patch: Partial<InteractiveButton>) => void;
+   174→  deleteButton: (id: ID) => void;
+   175→  addHandler: (buttonId: ID, handler: EventHandler) => void;
+   176→  updateHandler: (buttonId: ID, handlerId: ID, patch: Partial<EventHandler>) => void;
+   177→  deleteHandler: (buttonId: ID, handlerId: ID) => void;
+   178→  addAction: (buttonId: ID, handlerId: ID, action: Action) => void;
+   179→  updateAction: (
+   180→    buttonId: ID,
+   181→    handlerId: ID,
+   182→    actionId: ID,
+   183→    patch: Partial<Action>
+   184→  ) => void;
+   185→  deleteAction: (buttonId: ID, handlerId: ID, actionId: ID) => void;
+   186→
+   187→  // Variables
+   188→  setVariable: (name: string, value: Variable["value"]) => void;
+   189→  deleteVariable: (name: string) => void;
+   190→
+   191→  // Export options
+   192→  setExportOptions: (o: Partial<ExportOptions>) => void;
+   193→
+   194→  // Misc UI
+   195→  setPanelLayout: (l: "default" | "focus") => void;
+   196→  toggleGrid: () => void;
+   197→  toggleSafeArea: () => void;
+   198→  toggleRulers: () => void;
+   199→  setDrawingBuffer: (c: HTMLCanvasElement | null) => void;
+   200→  setRightPanelVisible: (v: boolean) => void;
+   201→  saveCustomPalette: (palette: string[]) => void;
+   202→  loadCustomPalette: () => string[];
+   203→
+   204→  // Undo / Redo multinivel
+   205→  pushHistory: (drawingId: ID, prevDataUrl: string, newDataUrl: string) => void;
+   206→  undo: () => void;
+   207→  redo: () => void;
+   208→  canUndo: () => boolean;
+   209→  canRedo: () => boolean;
+   210→
+   211→  // Placement de imagen (modo transformación de imagen importada)
+   212→  startImagePlacement: (dataUrl: string, nativeW: number, nativeH: number) => void;
+   213→  updateImagePlacement: (patch: Partial<ImagePlacement>) => void;
+   214→  confirmImagePlacement: () => Promise<void>;
+   215→  cancelImagePlacement: () => void;
+   216→
+   217→  // Autosave
+   218→  triggerAutosave: () => Promise<void>;
+   219→}
+   220→
+   221→// ---------------------------------------------------------------------------
+   222→// Tipo para entradas del stack de undo/redo
+   223→// ---------------------------------------------------------------------------
+   224→
+   225→interface HistoryEntry {
+   226→  drawingId: ID;
+   227→  prevDataUrl: string;
+   228→  newDataUrl: string;
+   229→}
+   230→
+   231→// ---------------------------------------------------------------------------
+   232→// Tipo para el placement de imagen (transformación interactiva)
+   233→// ---------------------------------------------------------------------------
+   234→
+   235→interface ImagePlacement {
+   236→  dataUrl: string;        // imagen original (data URL)
+   237→  x: number;               // posición x en coords del canvas (esquina sup-izq)
+   238→  y: number;               // posición y
+   239→  width: number;           // ancho actual (preserva aspect ratio)
+   240→  height: number;          // alto actual
+   241→  nativeW: number;         // ancho original de la imagen (px)
+   242→  nativeH: number;         // alto original (px)
+   243→}
+   244→
+   245→// ---------------------------------------------------------------------------
+   246→// Helpers internos
+   247→// ---------------------------------------------------------------------------
+   248→
+   249→function updateProject(
+   250→  state: AppState,
+   251→  updater: (p: AnimationProject) => AnimationProject
+   252→): Partial<AppState> {
+   253→  if (!state.project) return {};
+   254→  const newProject = updater({ ...state.project, dirty: true, updatedAt: Date.now() });
+   255→  return { project: newProject };
+   256→}
+   257→
+   258→// ---------------------------------------------------------------------------
+   259→// Store
+   260→// ---------------------------------------------------------------------------
+   261→
+   262→export const useStore = create<AppState>((set, get) => ({
+   263→  projects: [],
+   264→  projectsLoading: false,
+   265→  project: null,
+   266→
+   267→  currentTool: "pencil",
+   268→  brush: { ...DEFAULT_BRUSH },
+   269→  onion: { ...DEFAULT_ONION },
+   270→  playback: {
+   271→    playing: false,
+   272→    looping: true,
+   273→    speed: 1,
+   274→    playbackFps: 6,
+   275→    rangeStart: null,
+   276→    rangeEnd: null,
+   277→  },
+   278→  canvasView: { zoom: 1, panX: 0, panY: 0, rotation: 0 },
+   279→  viewMode: "edit",
+   280→  exportOptions: {
+   281→    format: "mp4",
+   282→    width: DEFAULT_SETTINGS.width,
+   283→    height: DEFAULT_SETTINGS.height,
+   284→    fps: DEFAULT_SETTINGS.fps,
+   285→    rangeStart: 0,
+   286→    rangeEnd: 0,
+   287→    includeAudio: true,
+   288→    quality: 0.92,
+   289→    backgroundColor: "#ffffff",
+   290→  },
+   291→
+   292→  panelLayout: "default",
+   293→  showGrid: false,
+   294→  showSafeArea: false,
+   295→  showRulers: false,
+   296→  thumbnailCache: {},
+   297→  isAutosaving: false,
+   298→  lastAutosaveAt: null,
+   299→  drawingBuffer: null,
+   300→  // Estado de dibujo y modificadores de teclado (no persistidos)
+   301→  isDrawing: false,
+   302→  rightPanelVisible: true,
+   303→  xModifier: false,
+   304→  zModifier: false,
+   305→  toolSettings: {} as Record<string, Partial<BrushSettings>>,
+   306→  customPalette: [] as string[],
+   307→  // Pilas de undo/redo (no persistidas)
+   308→  undoStack: [] as HistoryEntry[],
+   309→  redoStack: [] as HistoryEntry[],
+   310→  // Indicador para evitar que el motor de dibujo recargue el canvas
+   311→  // cuando se hace undo/redo (la imagen cacheada ya está actualizada)
+   312→  skipReloadOnHistory: false,
+   313→  // Placement de imagen (transformación interactiva)
+   314→  imagePlacement: null as ImagePlacement | null,
+   315→
+   316→  // -------------------------------------------------------------------------
+   317→  // Projects
+   318→  // -------------------------------------------------------------------------
+   319→
+   320→  refreshProjects: async () => {
+   321→    set({ projectsLoading: true });
+   322→    const projects = await listProjectsFromDb();
+   323→    set({ projects, projectsLoading: false });
+   324→  },
+   325→
+   326→  newProject: async (name) => {
+   327→    const project = createBlankProject(name);
+   328→    await saveProjectToDb(project);
+   329→    set({ project, projects: [project, ...get().projects] });
+   330→    return project;
+   331→  },
+   332→
+   333→  openProject: async (id) => {
+   334→    const project = await loadProjectFromDb(id);
+   335→    if (project) {
+   336→      set({ project, canvasView: { zoom: 1, panX: 0, panY: 0, rotation: 0 } });
+   337→    }
+   338→  },
+   339→
+   340→  saveCurrent: async () => {
+   341→    const p = get().project;
+   342→    if (!p) return;
+   343→    await saveProjectToDb(p);
+   344→    set({
+   345→      projects: [p, ...get().projects.filter((x) => x.id !== p.id)],
+   346→      isAutosaving: false,
+   347→      lastAutosaveAt: Date.now(),
+   348→    });
+   349→    set((s) => (s.project ? { project: { ...s.project, dirty: false } } : {}));
+   350→  },
+   351→
+   352→  duplicateCurrent: async (newName) => {
+   353→    const p = get().project;
+   354→    if (!p) return;
+   355→    const copy = await duplicateProjectInDb(p.id, newName);
+   356→    if (copy) {
+   357→      set({ project: copy, projects: [copy, ...get().projects] });
+   358→    }
+   359→  },
+   360→
+   361→  deleteProject: async (id) => {
+   362→    await deleteProjectFromDb(id);
+   363→    const p = get().project;
+   364→    if (p && p.id === id) {
+   365→      set({ project: null });
+   366→    }
+   367→    set({ projects: get().projects.filter((x) => x.id !== id) });
+   368→  },
+   369→
+   370→  closeProject: () => set({ project: null }),
+   371→
+   372→  exportProject: () => get().project,
+   373→
+   374→  // -------------------------------------------------------------------------
+   375→  // Tools
+   376→  // -------------------------------------------------------------------------
+   377→
+   378→  setTool: (tool) => {
+   379→    set((s) => {
+   380→      // Guardar la configuración actual del pincel para la herramienta actual
+   381→      // y restaurar la configuración guardada para la nueva herramienta.
+   382→      const prevTool = s.currentTool;
+   383→      const toolSettings = { ...s.toolSettings };
+   384→      // Guardar settings relevantes (size, opacity, color, hardness, etc.)
+   385→      toolSettings[prevTool] = {
+   386→        size: s.brush.size,
+   387→        color: s.brush.color,
+   388→        opacity: s.brush.opacity,
+   389→        hardness: s.brush.hardness,
+   390→        smoothing: s.brush.smoothing,
+   391→        fillTolerance: s.brush.fillTolerance,
+   392→      };
+   393→      // Restaurar settings de la nueva herramienta (si existen)
+   394→      const restored = toolSettings[tool];
+   395→      const newBrush = restored
+   396→        ? { ...s.brush, ...restored }
+   397→        : s.brush;
+   398→      return { currentTool: tool, toolSettings, brush: newBrush };
+   399→    });
+   400→  },
+   401→  setBrush: (b) => set((s) => ({ brush: { ...s.brush, ...b } })),
+   402→
+   403→  setOnion: (o) => set((s) => ({ onion: { ...s.onion, ...o } })),
+   404→
+   405→  togglePlay: () => set((s) => ({ playback: { ...s.playback, playing: !s.playback.playing } })),
+   406→  setPlaying: (p) => set((s) => ({ playback: { ...s.playback, playing: p } })),
+   407→  setLooping: (l) => set((s) => ({ playback: { ...s.playback, looping: l } })),
+   408→  setPlaybackFps: (fps) => set((s) => ({ playback: { ...s.playback, playbackFps: Math.max(1, fps) } })),
+   409→  setRange: (start, end) =>
+   410→    set((s) => ({ playback: { ...s.playback, rangeStart: start, rangeEnd: end } })),
+   411→
+   412→  setCanvasView: (v) => set((s) => ({ canvasView: { ...s.canvasView, ...v } })),
+   413→  resetCanvasView: () => set({ canvasView: { zoom: 1, panX: 0, panY: 0, rotation: 0 } }),
+   414→
+   415→  gotoFrame: (frame) =>
+   416→    set((s) =>
+   417→      s.project
+   418→        ? { project: { ...s.project, currentFrame: Math.max(0, frame) } }
+   419→        : {}
+   420→    ),
+   421→  nextFrame: () =>
+   422→    set((s) =>
+   423→      s.project
+   424→        ? { project: { ...s.project, currentFrame: s.project.currentFrame + 1 } }
+   425→        : {}
+   426→    ),
+   427→  prevFrame: () =>
+   428→    set((s) =>
+   429→      s.project && s.project.currentFrame > 0
+   430→        ? { project: { ...s.project, currentFrame: s.project.currentFrame - 1 } }
+   431→        : {}
+   432→    ),
+   433→  setViewMode: (m) => set({ viewMode: m }),
+   434→
+   435→  setProjectSettings: (settings) =>
+   436→    set((s) =>
+   437→      s.project
+   438→        ? {
+   439→            project: {
+   440→              ...s.project,
+   441→              settings: { ...s.project.settings, ...settings },
+   442→              dirty: true,
+   443→              updatedAt: Date.now(),
+   444→            },
+   445→          }
+   446→        : {}
+   447→    ),
+   448→
+   449→  renameProject: (name) =>
+   450→    set((s) =>
+   451→      s.project
+   452→        ? { project: { ...s.project, name, dirty: true, updatedAt: Date.now() } }
+   453→        : {}
+   454→    ),
+   455→
+   456→  // -------------------------------------------------------------------------
+   457→  // Layers
+   458→  // -------------------------------------------------------------------------
+   459→
+   460→  addLayer: (type, name) => {
+   461→    const state = get();
+   462→    if (!state.project) return "";
+   463→    const id = genId("layer");
+   464→    const newLayer: Layer = {
+   465→      id,
+   466→      name: name ?? `${type === "draw" ? "Capa de dibujo" : type === "reference" ? "Referencia" : type === "background" ? "Fondo" : "Audio"} ${state.project.layers.length + 1}`,
+   467→      type,
+   468→      cells: type === "draw" || type === "reference" || type === "background"
+   469→        ? [{ id: genId("cell"), drawingId: null, startFrame: 0, duration: 1 }]
+   470→        : [],
+   471→      visible: true,
+   472→      locked: false,
+   473→      opacity: 1,
+   474→      createdAt: Date.now(),
+   475→    };
+   476→    set(updateProject(state, (p) => ({
+   477→      ...p,
+   478→      layers: [...p.layers, newLayer],
+   479→      currentLayerId: id,
+   480→    })));
+   481→    return id;
+   482→  },
+   483→
+   484→  deleteLayer: (id) => {
+   485→    const state = get();
+   486→    if (!state.project) return;
+   487→    if (state.project.layers.length <= 1) return;
+   488→    set(updateProject(state, (p) => ({
+   489→      ...p,
+   490→      layers: p.layers.filter((l) => l.id !== id),
+   491→      currentLayerId: p.currentLayerId === id ? p.layers[0].id : p.currentLayerId,
+   492→    })));
+   493→  },
+   494→
+   495→  selectLayer: (id) =>
+   496→    set((s) =>
+   497→      s.project ? { project: { ...s.project, currentLayerId: id } } : {}
+   498→    ),
+   499→
+   500→  renameLayer: (id, name) => {
+   501→    const state = get();
+   502→    if (!state.project) return;
+   503→    set(updateProject(state, (p) => ({
+   504→      ...p,
+   505→      layers: p.layers.map((l) => (l.id === id ? { ...l, name } : l)),
+   506→    })));
+   507→  },
+   508→
+   509→  toggleLayerVisible: (id) => {
+   510→    const state = get();
+   511→    if (!state.project) return;
+   512→    set(updateProject(state, (p) => ({
+   513→      ...p,
+   514→      layers: p.layers.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l)),
+   515→    })));
+   516→  },
+   517→
+   518→  toggleLayerLocked: (id) => {
+   519→    const state = get();
+   520→    if (!state.project) return;
+   521→    set(updateProject(state, (p) => ({
+   522→      ...p,
+   523→      layers: p.layers.map((l) => (l.id === id ? { ...l, locked: !l.locked } : l)),
+   524→    })));
+   525→  },
+   526→
+   527→  setLayerOpacity: (id, opacity) => {
+   528→    const state = get();
+   529→    if (!state.project) return;
+   530→    set(updateProject(state, (p) => ({
+   531→      ...p,
+   532→      layers: p.layers.map((l) => (l.id === id ? { ...l, opacity } : l)),
+   533→    })));
+   534→  },
+   535→
+   536→  moveLayer: (id, dir) => {
+   537→    const state = get();
+   538→    if (!state.project) return;
+   539→    set(updateProject(state, (p) => {
+   540→      const layers = [...p.layers];
+   541→      const idx = layers.findIndex((l) => l.id === id);
+   542→      if (idx < 0) return p;
+   543→      const target = dir === "up" ? idx - 1 : idx + 1;
+   544→      if (target < 0 || target >= layers.length) return p;
+   545→      [layers[idx], layers[target]] = [layers[target], layers[idx]];
+   546→      return { ...p, layers };
+   547→    }));
+   548→  },
+   549→
+   550→  duplicateLayer: (id) => {
+   551→    const state = get();
+   552→    if (!state.project) return;
+   553→    set(updateProject(state, (p) => {
+   554→      const layer = p.layers.find((l) => l.id === id);
+   555→      if (!layer) return p;
+   556→      const newId = genId("layer");
+   557→      const newLayer: Layer = {
+   558→        ...layer,
+   559→        id: newId,
+   560→        name: `${layer.name} (copia)`,
+   561→        cells: layer.cells.map((c) => ({ ...c, id: genId("cell") })),
+   562→        createdAt: Date.now(),
+   563→      };
+   564→      const idx = p.layers.findIndex((l) => l.id === id);
+   565→      const layers = [...p.layers];
+   566→      layers.splice(idx + 1, 0, newLayer);
+   567→      return { ...p, layers, currentLayerId: newId };
+   568→    }));
+   569→  },
+   570→
+   571→  setLayerLoop: (id, range) => {
+   572→    const state = get();
+   573→    if (!state.project) return;
+   574→    set(updateProject(state, (p) => ({
+   575→      ...p,
+   576→      layers: p.layers.map((l) => (l.id === id ? { ...l, loopRange: range } : l)),
+   577→    })));
+   578→  },
+   579→
+   580→  // -------------------------------------------------------------------------
+   581→  // Cells / drawings
+   582→  // -------------------------------------------------------------------------
+   583→
+   584→  ensureDrawingForCell: async (layerId, frame) => {
+   585→    const state = get();
+   586→    if (!state.project) throw new Error("No project");
+   587→    const layer = state.project.layers.find((l) => l.id === layerId);
+   588→    if (!layer) throw new Error("Layer not found");
+   589→
+   590→    // Buscar celda existente en este frame
+   591→    const existing = layer.cells.find(
+   592→      (c) => frame >= c.startFrame && frame < c.startFrame + c.duration
+   593→    );
+   594→
+   595→    if (existing && existing.drawingId) {
+   596→      return existing.drawingId;
+   597→    }
+   598→
+   599→    // Crear nuevo Drawing vacío
+   600→    const drawingId = genId("draw");
+   601→    const now = Date.now();
+   602→    const canvas = document.createElement("canvas");
+   603→    canvas.width = state.project.settings.width;
+   604→    canvas.height = state.project.settings.height;
+   605→    const dataUrl = canvas.toDataURL("image/png");
+   606→
+   607→    const drawing: Drawing = {
+   608→      id: drawingId,
+   609→      name: `Drawing ${Object.keys(state.project.drawings).length + 1}`,
+   610→      dataUrl,
+   611→      width: state.project.settings.width,
+   612→      height: state.project.settings.height,
+   613→      createdAt: now,
+   614→      updatedAt: now,
+   615→    };
+   616→
+   617→    set(updateProject(state, (p) => {
+   618→      const layers = p.layers.map((l) => {
+   619→        if (l.id !== layerId) return l;
+   620→        const cells = [...l.cells];
+   621→        // Si existe celda en este frame, asignarle el drawingId
+   622→        const cell = cells.find(
+   623→          (c) => frame >= c.startFrame && frame < c.startFrame + c.duration
+   624→        );
+   625→        if (cell) {
+   626→          const idx = cells.indexOf(cell);
+   627→          cells[idx] = { ...cell, drawingId };
+   628→        } else {
+   629→          // Crear nueva celda
+   630→          cells.push({ id: genId("cell"), drawingId, startFrame: frame, duration: 1 });
+   631→          cells.sort((a, b) => a.startFrame - b.startFrame);
+   632→        }
+   633→        return { ...l, cells };
+   634→      });
+   635→      return {
+   636→        ...p,
+   637→        layers,
+   638→        drawings: { ...p.drawings, [drawingId]: drawing },
+   639→      };
+   640→    }));
+   641→
+   642→    return drawingId;
+   643→  },
+   644→
+   645→  setCellDrawing: (layerId, frame, drawingId) => {
+   646→    const state = get();
+   647→    if (!state.project) return;
+   648→    set(updateProject(state, (p) => {
+   649→      const layers = p.layers.map((l) => {
+   650→        if (l.id !== layerId) return l;
+   651→        const cells = [...l.cells];
+   652→        const cell = cells.find(
+   653→          (c) => frame >= c.startFrame && frame < c.startFrame + c.duration
+   654→        );
+   655→        if (cell) {
+   656→          const idx = cells.indexOf(cell);
+   657→          cells[idx] = { ...cell, drawingId };
+   658→        }
+   659→        return { ...l, cells };
+   660→      });
+   661→      return { ...p, layers };
+   662→    }));
+   663→  },
+   664→
+   665→  extendCell: (layerId, frame, delta) => {
+   666→    const state = get();
+   667→    if (!state.project) return;
+   668→    set(updateProject(state, (p) => {
+   669→      const layers = p.layers.map((l) => {
+   670→        if (l.id !== layerId) return l;
+   671→        const cells = [...l.cells];
+   672→        const cell = cells.find(
+   673→          (c) => frame >= c.startFrame && frame < c.startFrame + c.duration
+   674→        );
+   675→        if (cell) {
+   676→          const idx = cells.indexOf(cell);
+   677→          const newDuration = Math.max(1, cell.duration + delta);
+   678→          cells[idx] = { ...cell, duration: newDuration };
+   679→        }
+   680→        return { ...l, cells };
+   681→      });
+   682→      return { ...p, layers };
+   683→    }));
+   684→  },
+   685→
+   686→  insertEmptyFrame: (layerId, frame) => {
+   687→    const state = get();
+   688→    if (!state.project) return;
+   689→    set(updateProject(state, (p) => {
+   690→      const layers = p.layers.map((l) => {
+   691→        if (l.id !== layerId) return l;
+   692→        const cells = [...l.cells];
+   693→        // Avanzar todas las celdas en o después del frame
+   694→        const newCells = cells
+   695→          .map((c) =>
+   696→            c.startFrame >= frame
+   697→              ? { ...c, startFrame: c.startFrame + 1, id: genId("cell") }
+   698→              : c
+   699→          )
+   700→          .filter((c) => c.startFrame < totalFrames([{ cells }]) + 1);
+   701→        // Agregar nueva celda vacía
+   702→        newCells.push({
+   703→          id: genId("cell"),
+   704→          drawingId: null,
+   705→          startFrame: frame,
+   706→          duration: 1,
+   707→        });
+   708→        newCells.sort((a, b) => a.startFrame - b.startFrame);
+   709→        return { ...l, cells: newCells };
+   710→      });
+   711→      return { ...p, layers };
+   712→    }));
+   713→  },
+   714→
+   715→  removeCell: (layerId, cellId) => {
+   716→    const state = get();
+   717→    if (!state.project) return;
+   718→    set(updateProject(state, (p) => {
+   719→      const layers = p.layers.map((l) => {
+   720→        if (l.id !== layerId) return l;
+   721→        return { ...l, cells: l.cells.filter((c) => c.id !== cellId) };
+   722→      });
+   723→      return { ...p, layers };
+   724→    }));
+   725→  },
+   726→
+   727→  duplicateCell: (layerId, cellId) => {
+   728→    const state = get();
+   729→    if (!state.project) return;
+   730→    set(updateProject(state, (p) => {
+   731→      const layers = p.layers.map((l) => {
+   732→        if (l.id !== layerId) return l;
+   733→        const cell = l.cells.find((c) => c.id === cellId);
+   734→        if (!cell) return l;
+   735→        const newDrawingId = cell.drawingId ? genId("draw") : null;
+   736→        let drawings = p.drawings;
+   737→        if (newDrawingId && cell.drawingId) {
+   738→          const orig = p.drawings[cell.drawingId];
+   739→          if (orig) {
+   740→            drawings = {
+   741→              ...drawings,
+   742→              [newDrawingId]: {
+   743→                ...orig,
+   744→                id: newDrawingId,
+   745→                name: `${orig.name} (copia)`,
+   746→                createdAt: Date.now(),
+   747→                updatedAt: Date.now(),
+   748→              },
+   749→            };
+   750→          }
+   751→        }
+   752→        const newCell: Cell = {
+   753→          ...cell,
+   754→          id: genId("cell"),
+   755→          drawingId: newDrawingId,
+   756→          startFrame: cell.startFrame + cell.duration,
+   757→        };
+   758→        return { ...l, cells: [...l.cells, newCell].sort((a, b) => a.startFrame - b.startFrame) };
+   759→      });
+   760→      return { ...p, layers };
+   761→    }));
+   762→  },
+   763→
+   764→  moveCell: (layerId, cellId, newFrame) => {
+   765→    const state = get();
+   766→    if (!state.project) return;
+   767→    set(updateProject(state, (p) => {
+   768→      const layers = p.layers.map((l) => {
+   769→        if (l.id !== layerId) return l;
+   770→        const cells = l.cells.map((c) =>
+   771→          c.id === cellId ? { ...c, startFrame: Math.max(0, newFrame) } : c
+   772→        );
+   773→        cells.sort((a, b) => a.startFrame - b.startFrame);
+   774→        return { ...l, cells };
+   775→      });
+   776→      return { ...p, layers };
+   777→    }));
+   778→  },
+   779→
+   780→  setCellLabel: (layerId, cellId, label) => {
+   781→    const state = get();
+   782→    if (!state.project) return;
+   783→    set(updateProject(state, (p) => {
+   784→      const layers = p.layers.map((l) => {
+   785→        if (l.id !== layerId) return l;
+   786→        return {
+   787→          ...l,
+   788→          cells: l.cells.map((c) => (c.id === cellId ? { ...c, label } : c)),
+   789→        };
+   790→      });
+   791→      return { ...p, layers };
+   792→    }));
+   793→  },
+   794→
+   795→  setFrameLabel: (layerId, frame, label) => {
+   796→    const state = get();
+   797→    if (!state.project) return;
+   798→    set(updateProject(state, (p) => {
+   799→      const layers = p.layers.map((l) => {
+   800→        if (l.id !== layerId) return l;
+   801→        return {
+   802→          ...l,
+   803→          frameLabels: { ...(l.frameLabels ?? {}), [frame]: label as any },
+   804→        };
+   805→      });
+   806→      return { ...p, layers };
+   807→    }));
+   808→  },
+   809→
+   810→  // -------------------------------------------------------------------------
+   811→  // Drawings
+   812→  // -------------------------------------------------------------------------
+   813→
+   814→  addDrawing: (drawing) => {
+   815→    const state = get();
+   816→    if (!state.project) return;
+   817→    set(updateProject(state, (p) => ({
+   818→      ...p,
+   819→      drawings: { ...p.drawings, [drawing.id]: drawing },
+   820→    })));
+   821→  },
+   822→
+   823→  updateDrawing: async (id, dataUrl) => {
+   824→    const state = get();
+   825→    if (!state.project) return;
+   826→    const drawing = state.project.drawings[id];
+   827→    if (!drawing) return;
+   828→    set(updateProject(state, (p) => ({
+   829→      ...p,
+   830→      drawings: {
+   831→        ...p.drawings,
+   832→        [id]: { ...drawing, dataUrl, updatedAt: Date.now() },
+   833→      },
+   834→    })));
+   835→  },
+   836→
+   837→  deleteDrawing: (id) => {
+   838→    const state = get();
+   839→    if (!state.project) return;
+   840→    set(updateProject(state, (p) => {
+   841→      const drawings = { ...p.drawings };
+   842→      delete drawings[id];
+   843→      const layers = p.layers.map((l) => ({
+   844→        ...l,
+   845→        cells: l.cells.map((c) => (c.drawingId === id ? { ...c, drawingId: null } : c)),
+   846→      }));
+   847→      return { ...p, drawings, layers };
+   848→    }));
+   849→  },
+   850→
+   851→  getDrawing: (id) => {
+   852→    const p = get().project;
+   853→    if (!p) return null;
+   854→    return p.drawings[id] ?? null;
+   855→  },
+   856→
+   857→  // -------------------------------------------------------------------------
+   858→  // Markers
+   859→  // -------------------------------------------------------------------------
+   860→
+   861→  addMarker: (frame, label, color) => {
+   862→    const state = get();
+   863→    if (!state.project) return;
+   864→    const marker: Marker = { id: genId("mark"), frame, label, color };
+   865→    set(updateProject(state, (p) => ({
+   866→      ...p,
+   867→      markers: [...p.markers, marker].sort((a, b) => a.frame - b.frame),
+   868→    })));
+   869→  },
+   870→
+   871→  deleteMarker: (id) => {
+   872→    const state = get();
+   873→    if (!state.project) return;
+   874→    set(updateProject(state, (p) => ({
+   875→      ...p,
+   876→      markers: p.markers.filter((m) => m.id !== id),
+   877→    })));
+   878→  },
+   879→
+   880→  gotoNextMarker: () => {
+   881→    const s = get();
+   882→    if (!s.project) return;
+   883→    const next = s.project.markers
+   884→      .filter((m) => m.frame > s.project!.currentFrame)
+   885→      .sort((a, b) => a.frame - b.frame)[0];
+   886→    if (next) s.gotoFrame(next.frame);
+   887→  },
+   888→
+   889→  gotoPrevMarker: () => {
+   890→    const s = get();
+   891→    if (!s.project) return;
+   892→    const prev = s.project.markers
+   893→      .filter((m) => m.frame < s.project!.currentFrame)
+   894→      .sort((a, b) => b.frame - a.frame)[0];
+   895→    if (prev) s.gotoFrame(prev.frame);
+   896→  },
+   897→
+   898→  // -------------------------------------------------------------------------
+   899→  // Audio
+   900→  // -------------------------------------------------------------------------
+   901→
+   902→  addAudioClip: (clip) => {
+   903→    const state = get();
+   904→    if (!state.project) return;
+   905→    set(updateProject(state, (p) => ({
+   906→      ...p,
+   907→      audioClips: { ...p.audioClips, [clip.id]: clip },
+   908→    })));
+   909→  },
+   910→
+   911→  deleteAudioClip: (id) => {
+   912→    const state = get();
+   913→    if (!state.project) return;
+   914→    set(updateProject(state, (p) => {
+   915→      const audioClips = { ...p.audioClips };
+   916→      delete audioClips[id];
+   917→      const layers = p.layers.map((l) =>
+   918→        l.audioClipId === id ? { ...l, audioClipId: undefined } : l
+   919→      );
+   920→      return { ...p, audioClips, layers };
+   921→    }));
+   922→  },
+   923→
+   924→  setAudioClipStart: (id, frame) => {
+   925→    const state = get();
+   926→    if (!state.project) return;
+   927→    set(updateProject(state, (p) => ({
+   928→      ...p,
+   929→      audioClips: {
+   930→        ...p.audioClips,
+   931→        [id]: { ...p.audioClips[id], startFrame: frame },
+   932→      },
+   933→    })));
+   934→  },
+   935→
+   936→  toggleAudioMute: (id) => {
+   937→    const state = get();
+   938→    if (!state.project) return;
+   939→    set(updateProject(state, (p) => ({
+   940→      ...p,
+   941→      audioClips: {
+   942→        ...p.audioClips,
+   943→        [id]: { ...p.audioClips[id], muted: !p.audioClips[id].muted },
+   944→      },
+   945→    })));
+   946→  },
+   947→
+   948→  // -------------------------------------------------------------------------
+   949→  // Buttons & actions
+   950→  // -------------------------------------------------------------------------
+   951→
+   952→  addButton: (button) => {
+   953→    const state = get();
+   954→    const id = genId("btn");
+   955→    if (!state.project) return id;
+   956→    const fullButton: InteractiveButton = {
+   957→      id,
+   958→      name: button.name ?? `Botón ${state.project.buttons.length + 1}`,
+   959→      x: button.x ?? 50,
+   960→      y: button.y ?? 50,
+   961→      width: button.width ?? 120,
+   962→      height: button.height ?? 40,
+   963→      label: button.label ?? "Botón",
+   964→      color: button.color ?? "#e67e22",
+   965→      visible: button.visible ?? true,
+   966→      handlers: button.handlers ?? [],
+   967→    };
+   968→    set(updateProject(state, (p) => ({
+   969→      ...p,
+   970→      buttons: [...p.buttons, fullButton],
+   971→    })));
+   972→    return id;
+   973→  },
+   974→
+   975→  updateButton: (id, patch) => {
+   976→    const state = get();
+   977→    if (!state.project) return;
+   978→    set(updateProject(state, (p) => ({
+   979→      ...p,
+   980→      buttons: p.buttons.map((b) => (b.id === id ? { ...b, ...patch } : b)),
+   981→    })));
+   982→  },
+   983→
+   984→  deleteButton: (id) => {
+   985→    const state = get();
+   986→    if (!state.project) return;
+   987→    set(updateProject(state, (p) => ({
+   988→      ...p,
+   989→      buttons: p.buttons.filter((b) => b.id !== id),
+   990→    })));
+   991→  },
+   992→
+   993→  addHandler: (buttonId, handler) => {
+   994→    const state = get();
+   995→    if (!state.project) return;
+   996→    set(updateProject(state, (p) => ({
+   997→      ...p,
+   998→      buttons: p.buttons.map((b) =>
+   999→        b.id === buttonId ? { ...b, handlers: [...b.handlers, handler] } : b
+  1000→      ),
+  1001→    })));
+  1002→  },
+  1003→
+  1004→  updateHandler: (buttonId, handlerId, patch) => {
+  1005→    const state = get();
+  1006→    if (!state.project) return;
+  1007→    set(updateProject(state, (p) => ({
+  1008→      ...p,
+  1009→      buttons: p.buttons.map((b) =>
+  1010→        b.id === buttonId
+  1011→          ? {
+  1012→              ...b,
+  1013→              handlers: b.handlers.map((h) =>
+  1014→                h.id === handlerId ? { ...h, ...patch } : h
+  1015→              ),
+  1016→            }
+  1017→          : b
+  1018→      ),
+  1019→    })));
+  1020→  },
+  1021→
+  1022→  deleteHandler: (buttonId, handlerId) => {
+  1023→    const state = get();
+  1024→    if (!state.project) return;
+  1025→    set(updateProject(state, (p) => ({
+  1026→      ...p,
+  1027→      buttons: p.buttons.map((b) =>
+  1028→        b.id === buttonId
+  1029→          ? { ...b, handlers: b.handlers.filter((h) => h.id !== handlerId) }
+  1030→          : b
+  1031→      ),
+  1032→    })));
+  1033→  },
+  1034→
+  1035→  addAction: (buttonId, handlerId, action) => {
+  1036→    const state = get();
+  1037→    if (!state.project) return;
+  1038→    set(updateProject(state, (p) => ({
+  1039→      ...p,
+  1040→      buttons: p.buttons.map((b) =>
+  1041→        b.id === buttonId
+  1042→          ? {
+  1043→              ...b,
+  1044→              handlers: b.handlers.map((h) =>
+  1045→                h.id === handlerId
+  1046→                  ? { ...h, actions: [...h.actions, action] }
+  1047→                  : h
+  1048→              ),
+  1049→            }
+  1050→          : b
+  1051→      ),
+  1052→    })));
+  1053→  },
+  1054→
+  1055→  updateAction: (buttonId, handlerId, actionId, patch) => {
+  1056→    const state = get();
+  1057→    if (!state.project) return;
+  1058→    set(updateProject(state, (p) => ({
+  1059→      ...p,
+  1060→      buttons: p.buttons.map((b) =>
+  1061→        b.id === buttonId
+  1062→          ? {
+  1063→              ...b,
+  1064→              handlers: b.handlers.map((h) =>
+  1065→                h.id === handlerId
+  1066→                  ? {
+  1067→                      ...h,
+  1068→                      actions: h.actions.map((a) =>
+  1069→                        a.id === actionId ? { ...a, ...patch } : a
+  1070→                      ),
+  1071→                    }
+  1072→                  : h
+  1073→              ),
+  1074→            }
+  1075→          : b
+  1076→      ),
+  1077→    })));
+  1078→  },
+  1079→
+  1080→  deleteAction: (buttonId, handlerId, actionId) => {
+  1081→    const state = get();
+  1082→    if (!state.project) return;
+  1083→    set(updateProject(state, (p) => ({
+  1084→      ...p,
+  1085→      buttons: p.buttons.map((b) =>
+  1086→        b.id === buttonId
+  1087→          ? {
+  1088→              ...b,
+  1089→              handlers: b.handlers.map((h) =>
+  1090→                h.id === handlerId
+  1091→                  ? { ...h, actions: h.actions.filter((a) => a.id !== actionId) }
+  1092→                  : h
+  1093→              ),
+  1094→            }
+  1095→          : b
+  1096→      ),
+  1097→    })));
+  1098→  },
+  1099→
+  1100→  // -------------------------------------------------------------------------
+  1101→  // Variables
+  1102→  // -------------------------------------------------------------------------
+  1103→
+  1104→  setVariable: (name, value) => {
+  1105→    const state = get();
+  1106→    if (!state.project) return;
+  1107→    set(updateProject(state, (p) => {
+  1108→      const others = p.variables.filter((v) => v.name !== name);
+  1109→      return { ...p, variables: [...others, { name, value }] };
+  1110→    }));
+  1111→  },
+  1112→
+  1113→  deleteVariable: (name) => {
+  1114→    const state = get();
+  1115→    if (!state.project) return;
+  1116→    set(updateProject(state, (p) => ({
+  1117→      ...p,
+  1118→      variables: p.variables.filter((v) => v.name !== name),
+  1119→    })));
+  1120→  },
+  1121→
+  1122→  // -------------------------------------------------------------------------
+  1123→  // Export options
+  1124→  // -------------------------------------------------------------------------
+  1125→
+  1126→  setExportOptions: (o) =>
+  1127→    set((s) => ({ exportOptions: { ...s.exportOptions, ...o } })),
+  1128→
+  1129→  // -------------------------------------------------------------------------
+  1130→  // Misc UI
+  1131→  // -------------------------------------------------------------------------
+  1132→
+  1133→  setPanelLayout: (l) => set({ panelLayout: l }),
+  1134→  toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
+  1135→  toggleSafeArea: () => set((s) => ({ showSafeArea: !s.showSafeArea })),
+  1136→  toggleRulers: () => set((s) => ({ showRulers: !s.showRulers })),
+  1137→  setDrawingBuffer: (c) => set({ drawingBuffer: c }),
+  1138→  setRightPanelVisible: (v) => set({ rightPanelVisible: v }),
+  1139→  saveCustomPalette: (palette) => {
+  1140→    set({ customPalette: palette });
+  1141→    try {
+  1142→      localStorage.setItem("dibujeitor:customPalette", JSON.stringify(palette));
+  1143→    } catch (e) {
+  1144→      console.warn("No se pudo guardar la paleta:", e);
+  1145→    }
+  1146→  },
+  1147→  loadCustomPalette: () => {
+  1148→    try {
+  1149→      const raw = localStorage.getItem("dibujeitor:customPalette");
+  1150→      if (!raw) return [];
+  1151→      const parsed = JSON.parse(raw);
+  1152→      if (Array.isArray(parsed)) {
+  1153→        set({ customPalette: parsed });
+  1154→        return parsed as string[];
+  1155→      }
+  1156→    } catch (e) {
+  1157→      console.warn("No se pudo cargar la paleta:", e);
+  1158→    }
+  1159→    return [];
+  1160→  },
+  1161→
+  1162→  // -------------------------------------------------------------------------
+  1163→  // Undo / Redo multinivel
+  1164→  // -------------------------------------------------------------------------
+  1165→
+  1166→  pushHistory: (drawingId, prevDataUrl, newDataUrl) => {
+  1167→    // Si prev y new son idénticos, no agregar entrada (no-op)
+  1168→    if (prevDataUrl === newDataUrl) return;
+  1169→    set((s) => ({
+  1170→      undoStack: [...s.undoStack, { drawingId, prevDataUrl, newDataUrl }].slice(-50),
+  1171→      redoStack: [], // Clear redo on new action
+  1172→    }));
+  1173→  },
+  1174→
+  1175→  undo: () => {
+  1176→    const s = get();
+  1177→    if (s.undoStack.length === 0) return;
+  1178→    const entry = s.undoStack[s.undoStack.length - 1];
+  1179→    // Restaurar el dataUrl anterior en el proyecto
+  1180→    set((st) => {
+  1181→      if (!st.project) return {};
+  1182→      if (!st.project.drawings[entry.drawingId]) return {};
+  1183→      const restored = {
+  1184→        ...st.project,
+  1185→        drawings: {
+  1186→          ...st.project.drawings,
+  1187→          [entry.drawingId]: {
+  1188→            ...st.project.drawings[entry.drawingId],
+  1189→            dataUrl: entry.prevDataUrl,
+  1190→            updatedAt: Date.now(),
+  1191→          },
+  1192→        },
+  1193→        dirty: true,
+  1194→        updatedAt: Date.now(),
+  1195→      };
+  1196→      return {
+  1197→        project: restored,
+  1198→        undoStack: st.undoStack.slice(0, -1),
+  1199→        redoStack: [...st.redoStack, entry],
+  1200→        skipReloadOnHistory: false,
+  1201→      };
+  1202→    });
+  1203→    // Pre-cachear la imagen restaurada
+  1204→    import("./useDrawingEngine").then(({ preloadImage }) => {
+  1205→      preloadImage(entry.drawingId, entry.prevDataUrl);
+  1206→    });
+  1207→  },
+  1208→
+  1209→  redo: () => {
+  1210→    const s = get();
+  1211→    if (s.redoStack.length === 0) return;
+  1212→    const entry = s.redoStack[s.redoStack.length - 1];
+  1213→    set((st) => {
+  1214→      if (!st.project) return {};
+  1215→      if (!st.project.drawings[entry.drawingId]) return {};
+  1216→      const restored = {
+  1217→        ...st.project,
+  1218→        drawings: {
+  1219→          ...st.project.drawings,
+  1220→          [entry.drawingId]: {
+  1221→            ...st.project.drawings[entry.drawingId],
+  1222→            dataUrl: entry.newDataUrl,
+  1223→            updatedAt: Date.now(),
+  1224→          },
+  1225→        },
+  1226→        dirty: true,
+  1227→        updatedAt: Date.now(),
+  1228→      };
+  1229→      return {
+  1230→        project: restored,
+  1231→        redoStack: st.redoStack.slice(0, -1),
+  1232→        undoStack: [...st.undoStack, entry],
+  1233→        skipReloadOnHistory: false,
+  1234→      };
+  1235→    });
+  1236→    import("./useDrawingEngine").then(({ preloadImage }) => {
+  1237→      preloadImage(entry.drawingId, entry.newDataUrl);
+  1238→    });
+  1239→  },
+  1240→
+  1241→  canUndo: () => get().undoStack.length > 0,
+  1242→  canRedo: () => get().redoStack.length > 0,
+  1243→
+  1244→  // -------------------------------------------------------------------------
+  1245→  // Placement de imagen (modo transformación de imagen importada)
+  1246→  // -------------------------------------------------------------------------
+  1247→
+  1248→  startImagePlacement: (dataUrl, nativeW, nativeH) => {
+  1249→    const s = get();
+  1250→    if (!s.project) return;
+  1251→    // Calcular tamaño inicial preservando aspect ratio:
+  1252→    // - Si la imagen es más chica que el canvas, usar tamaño nativo
+  1253→    // - Si es más grande, escalar para que entre (con margen del 10%)
+  1254→    const cw = s.project.settings.width;
+  1255→    const ch = s.project.settings.height;
+  1256→    const margin = 0.1; // 10% de margen
+  1257→    const maxW = cw * (1 - 2 * margin);
+  1258→    const maxH = ch * (1 - 2 * margin);
+  1259→    let w = nativeW;
+  1260→    let h = nativeH;
+  1261→    if (w > maxW || h > maxH) {
+  1262→      const scale = Math.min(maxW / w, maxH / h);
+  1263→      w = Math.round(w * scale);
+  1264→      h = Math.round(h * scale);
+  1265→    }
+  1266→    // Centrar en el canvas
+  1267→    const x = Math.round((cw - w) / 2);
+  1268→    const y = Math.round((ch - h) / 2);
+  1269→    set({
+  1270→      imagePlacement: {
+  1271→        dataUrl,
+  1272→        x,
+  1273→        y,
+  1274→        width: w,
+  1275→        height: h,
+  1276→        nativeW,
+  1277→        nativeH,
+  1278→      },
+  1279→    });
+  1280→  },
+  1281→
+  1282→  updateImagePlacement: (patch) => {
+  1283→    set((s) => ({
+  1284→      imagePlacement: s.imagePlacement ? { ...s.imagePlacement, ...patch } : null,
+  1285→    }));
+  1286→  },
+  1287→
+  1288→  confirmImagePlacement: async () => {
+  1289→    const s = get();
+  1290→    if (!s.project || !s.imagePlacement) return;
+  1291→    const placement = s.imagePlacement;
+  1292→    // Renderizar la imagen al tamaño actual en el canvas del drawing activo
+  1293→    // Crear nuevo drawing o usar el existente
+  1294→    const layer = s.project.layers.find((l) => l.id === s.project!.currentLayerId);
+  1295→    if (!layer || layer.locked || !layer.visible || layer.type === "audio") {
+  1296→      set({ imagePlacement: null });
+  1297→      return;
+  1298→    }
+  1299→
+  1300→    // Cargar la imagen
+  1301→    const img = await new Promise<HTMLImageElement | null>((resolve) => {
+  1302→      const i = new Image();
+  1303→      i.onload = () => resolve(i);
+  1304→      i.onerror = () => resolve(null);
+  1305→      i.src = placement.dataUrl;
+  1306→    });
+  1307→    if (!img) {
+  1308→      set({ imagePlacement: null });
+  1309→      return;
+  1310→    }
+  1311→
+  1312→    // Crear un canvas temporal con el contenido actual del drawing + la imagen pegada
+  1313→    const tmpCanvas = document.createElement("canvas");
+  1314→    tmpCanvas.width = s.project.settings.width;
+  1315→    tmpCanvas.height = s.project.settings.height;
+  1316→    const tmpCtx = tmpCanvas.getContext("2d")!;
+  1317→    // Si hay un drawing existente, dibujarlo primero
+  1318→    const cell = layer.cells.find(
+  1319→      (c) =>
+  1320→        s.project!.currentFrame >= c.startFrame &&
+  1321→        s.project!.currentFrame < c.startFrame + c.duration
+  1322→    );
+  1323→    if (cell?.drawingId) {
+  1324→      const existing = s.project.drawings[cell.drawingId];
+  1325→      if (existing) {
+  1326→        const existingImg = await new Promise<HTMLImageElement | null>((resolve) => {
+  1327→          const i = new Image();
+  1328→          i.onload = () => resolve(i);
+  1329→          i.onerror = () => resolve(null);
+  1330→          i.src = existing.dataUrl;
+  1331→        });
+  1332→        if (existingImg) {
+  1333→          tmpCtx.drawImage(existingImg, 0, 0, tmpCanvas.width, tmpCanvas.height);
+  1334→        }
+  1335→      }
+  1336→    }
+  1337→    // Dibujar la imagen colocada en su transformación final
+  1338→    tmpCtx.drawImage(img, placement.x, placement.y, placement.width, placement.height);
+  1339→    const finalDataUrl = tmpCanvas.toDataURL("image/png");
+  1340→
+  1341→    // Crear/actualizar el drawing con la imagen pegada
+  1342→    const drawingId = cell?.drawingId ?? crypto.randomUUID();
+  1343→    const now = Date.now();
+  1344→    const prevDataUrl = cell?.drawingId ? s.project.drawings[cell.drawingId]?.dataUrl ?? "" : "";
+  1345→
+  1346→    // Pre-cachear la imagen final
+  1347→    const { preloadImage } = await import("./useDrawingEngine");
+  1348→    await preloadImage(drawingId, finalDataUrl);
+  1349→
+  1350→    set((st) => {
+  1351→      if (!st.project) return {};
+  1352→      const layers = st.project.layers.map((l) => {
+  1353→        if (l.id !== layer.id) return l;
+  1354→        const cells = [...l.cells];
+  1355→        const existingCell = cells.find(
+  1356→          (c) =>
+  1357→            st.project!.currentFrame >= c.startFrame &&
+  1358→            st.project!.currentFrame < c.startFrame + c.duration
+  1359→        );
+  1360→        if (existingCell) {
+  1361→          const idx = cells.indexOf(existingCell);
+  1362→          cells[idx] = { ...existingCell, drawingId };
+  1363→        } else {
+  1364→          cells.push({
+  1365→            id: crypto.randomUUID(),
+  1366→            drawingId,
+  1367→            startFrame: st.project.currentFrame,
+  1368→            duration: 1,
+  1369→          });
+  1370→          cells.sort((a, b) => a.startFrame - b.startFrame);
+  1371→        }
+  1372→        return { ...l, cells };
+  1373→      });
+  1374→      return {
+  1375→        project: {
+  1376→          ...st.project,
+  1377→          layers,
+  1378→          drawings: {
+  1379→            ...st.project.drawings,
+  1380→            [drawingId]: {
+  1381→              id: drawingId,
+  1382→              name: "Imagen importada",
+  1383→              dataUrl: finalDataUrl,
+  1384→              width: st.project.settings.width,
+  1385→              height: st.project.settings.height,
+  1386→              createdAt: now,
+  1387→              updatedAt: now,
+  1388→            },
+  1389→          },
+  1390→          dirty: true,
+  1391→          updatedAt: now,
+  1392→        },
+  1393→        imagePlacement: null,
+  1394→      };
+  1395→    });
+  1396→
+  1397→    // Registrar en el stack de undo
+  1398→    if (prevDataUrl && prevDataUrl !== finalDataUrl) {
+  1399→      get().pushHistory(drawingId, prevDataUrl, finalDataUrl);
+  1400→    }
+  1401→  },
+  1402→
+  1403→  cancelImagePlacement: () => {
+  1404→    set({ imagePlacement: null });
+  1405→  },
+  1406→
+  1407→  triggerAutosave: async () => {
+  1408→    const s = get();
+  1409→    if (!s.project || !s.project.dirty) return;
+  1410→    set({ isAutosaving: true });
+  1411→    await saveProjectToDb(s.project);
+  1412→    set({
+  1413→      isAutosaving: false,
+  1414→      lastAutosaveAt: Date.now(),
+  1415→      projects: [s.project, ...s.projects.filter((x) => x.id !== s.project!.id)],
+  1416→    });
+  1417→    set((st) => (st.project ? { project: { ...st.project, dirty: false } } : {}));
+  1418→  },
+  1419→}));
+  1420→
+  1421→// ---------------------------------------------------------------------------
+  1422→// Selector de capas ordenadas para visualización (de arriba a abajo)
+  1423→// ---------------------------------------------------------------------------
+  1424→
+  1425→export function getOrderedLayers(project: AnimationProject): Layer[] {
+  1426→  return [...project.layers].reverse();
+  1427→}
+  1428→
+  1429→/** Devuelve la capa actualmente seleccionada. */
+  1430→export function getCurrentLayer(project: AnimationProject): Layer | null {
+  1431→  if (!project.currentLayerId) return null;
+  1432→  return project.layers.find((l) => l.id === project.currentLayerId) ?? null;
+  1433→}
+  1434→

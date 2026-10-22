@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { useStore } from "@/lib/animation/store";
 import { usePlaybackEngine } from "@/lib/animation/useDrawingEngine";
+import { totalFrames } from "@/lib/animation/utils";
 import {
   Menubar,
   MenubarContent,
@@ -172,7 +173,8 @@ export function EditorView() {
         case "n":
           e.preventDefault();
           if (project.currentLayerId) {
-            const nextFrameIdx = project.currentFrame + 1;
+            // Agregar DESPUÉS del último frame existente (igual que el botón +)
+            const nextFrameIdx = totalFrames(project.layers);
             useStore.getState().ensureDrawingForCell(project.currentLayerId, nextFrameIdx).then(() => {
               useStore.getState().gotoFrame(nextFrameIdx);
             });

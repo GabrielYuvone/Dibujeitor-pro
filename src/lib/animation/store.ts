@@ -152,6 +152,7 @@ interface AppState {
   ensureDrawingForCell: (layerId: ID, frame: number) => Promise<ID>;
   setCellDrawing: (layerId: ID, frame: number, drawingId: ID | null) => void;
   extendCell: (layerId: ID, frame: number, delta: number) => void;
+  setCellDuration: (layerId: ID, cellId: ID, newDuration: number) => void;
   insertEmptyFrame: (layerId: ID, frame: number) => void;
   removeCell: (layerId: ID, cellId: ID) => void;
   duplicateCell: (layerId: ID, cellId: ID) => void;
@@ -212,6 +213,7 @@ interface AppState {
 
   // Undo / Redo multinivel
   pushHistory: (drawingId: ID, prevDataUrl: string, newDataUrl: string) => void;
+  pushProjectSnapshot: () => void;
   undo: () => void;
   redo: () => void;
   canUndo: () => boolean;
@@ -230,12 +232,18 @@ interface AppState {
 // ---------------------------------------------------------------------------
 // Tipo para entradas del stack de undo/redo
 // ---------------------------------------------------------------------------
+// Dos tipos de entrada:
+//  - "drawing": edición in-place de un drawing (pincel, goma, etc.)
+//  - "project": cambio estructural (agregar capa, mover cell, extender
+//    cell, etc.). Para estos, capturamos una referencia al project
+//    PRE-mutación. Como los proyectos son inmutables (cada mutación
+//    produce un nuevo objeto), la referencia capturada sigue apuntando
+//    al estado anterior. La memoria es eficiente porque los drawings
+//    compartidos entre snapshots se referencian, no se duplican.
 
-interface HistoryEntry {
-  drawingId: ID;
-  prevDataUrl: string;
-  newDataUrl: string;
-}
+type HistoryEntry =
+  | { type: "drawing"; drawingId: ID; prevDataUrl: string; newDataUrl: string }
+  | { type: "project"; prevProject: AnimationProject };
 
 // ---------------------------------------------------------------------------
 // Tipo para el placement de imagen (transformación interactiva)
@@ -469,6 +477,7 @@ export const useStore = create<AppState>((set, get) => ({
   addLayer: (type, name) => {
     const state = get();
     if (!state.project) return "";
+    get().pushProjectSnapshot();
     const id = genId("layer");
     const newLayer: Layer = {
       id,
@@ -494,6 +503,7 @@ export const useStore = create<AppState>((set, get) => ({
     const state = get();
     if (!state.project) return;
     if (state.project.layers.length <= 1) return;
+    get().pushProjectSnapshot();
     set(updateProject(state, (p) => ({
       ...p,
       layers: p.layers.filter((l) => l.id !== id),
@@ -545,6 +555,7 @@ export const useStore = create<AppState>((set, get) => ({
   moveLayer: (id, dir) => {
     const state = get();
     if (!state.project) return;
+    get().pushProjectSnapshot();
     set(updateProject(state, (p) => {
       const layers = [...p.layers];
       const idx = layers.findIndex((l) => l.id === id);
@@ -559,6 +570,7 @@ export const useStore = create<AppState>((set, get) => ({
   duplicateLayer: (id) => {
     const state = get();
     if (!state.project) return;
+    get().pushProjectSnapshot();
     set(updateProject(state, (p) => {
       const layer = p.layers.find((l) => l.id === id);
       if (!layer) return p;
@@ -747,14 +759,29 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Cambiar la duración de una celda específica por su ID
   setCellDuration: (layerId, cellId, newDuration) => {
+    // Cambia la duración (exposición) de un cell. Si la duración AUMENTA,
+    // los cells posteriores de la misma capa se desplazan a la derecha
+    // para no quedar solapados (que es el bug que reporta el usuario).
+    // Si disminuye, los cells siguientes se "pegan" al nuevo fin
+    // manteniendo la continuidad temporal (más útil que dejar un hueco).
     const state = get();
     if (!state.project) return;
+    get().pushProjectSnapshot();
     set(updateProject(state, (p) => {
       const layers = p.layers.map((l) => {
         if (l.id !== layerId) return l;
-        const cells = l.cells.map((c) =>
-          c.id === cellId ? { ...c, duration: Math.max(1, newDuration) } : c
-        );
+        const idx = l.cells.findIndex((c) => c.id === cellId);
+        if (idx < 0) return l;
+        const cell = l.cells[idx];
+        const safeDuration = Math.max(1, newDuration);
+        const delta = safeDuration - cell.duration;
+        // Mover todos los cells posteriores por delta
+        const cells = l.cells.map((c, i) => {
+          if (i === idx) return { ...c, duration: safeDuration };
+          if (i > idx) return { ...c, startFrame: Math.max(0, c.startFrame + delta) };
+          return c;
+        });
+        cells.sort((a, b) => a.startFrame - b.startFrame);
         return { ...l, cells };
       });
       return { ...p, layers };
@@ -764,6 +791,7 @@ export const useStore = create<AppState>((set, get) => ({
   extendCell: (layerId, frame, delta) => {
     const state = get();
     if (!state.project) return;
+    get().pushProjectSnapshot();
     const layer = state.project.layers.find((l) => l.id === layerId);
     if (!layer) return;
     const cell = layer.cells.find(
@@ -777,6 +805,7 @@ export const useStore = create<AppState>((set, get) => ({
   insertEmptyFrame: (layerId, frame) => {
     const state = get();
     if (!state.project) return;
+    get().pushProjectSnapshot();
     set(updateProject(state, (p) => {
       const layers = p.layers.map((l) => {
         if (l.id !== layerId) return l;
@@ -806,6 +835,7 @@ export const useStore = create<AppState>((set, get) => ({
   removeCell: (layerId, cellId) => {
     const state = get();
     if (!state.project) return;
+    get().pushProjectSnapshot();
     set(updateProject(state, (p) => {
       const layers = p.layers.map((l) => {
         if (l.id !== layerId) return l;
@@ -818,6 +848,7 @@ export const useStore = create<AppState>((set, get) => ({
   duplicateCell: (layerId, cellId) => {
     const state = get();
     if (!state.project) return;
+    get().pushProjectSnapshot();
     set(updateProject(state, (p) => {
       const layers = p.layers.map((l) => {
         if (l.id !== layerId) return l;
@@ -853,8 +884,14 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   moveCell: (layerId, cellId, newFrame) => {
+    // Mueve un cell a `newFrame` (en coords absolutas del timeline). Si al
+    // moverlo queda solapado con otro cell de la misma capa, empuja los
+    // posteriores a la derecha hasta que no haya solapamiento. Esto
+    // permite arrastrar cells dentro del timeline y que el layout se
+    // reorganice sin superposiciones.
     const state = get();
     if (!state.project) return;
+    get().pushProjectSnapshot();
     set(updateProject(state, (p) => {
       const layers = p.layers.map((l) => {
         if (l.id !== layerId) return l;
@@ -862,6 +899,16 @@ export const useStore = create<AppState>((set, get) => ({
           c.id === cellId ? { ...c, startFrame: Math.max(0, newFrame) } : c
         );
         cells.sort((a, b) => a.startFrame - b.startFrame);
+        // Resolver solapamientos: si un cell empieza antes de que termine
+        // el anterior, empujarlo a la derecha. Procesar en orden.
+        for (let i = 1; i < cells.length; i++) {
+          const prev = cells[i - 1];
+          const cur = cells[i];
+          const prevEnd = prev.startFrame + prev.duration;
+          if (cur.startFrame < prevEnd) {
+            cells[i] = { ...cur, startFrame: prevEnd };
+          }
+        }
         return { ...l, cells };
       });
       return { ...p, layers };
@@ -1258,75 +1305,127 @@ export const useStore = create<AppState>((set, get) => ({
     // Si prev y new son idénticos, no agregar entrada (no-op)
     if (prevDataUrl === newDataUrl) return;
     set((s) => ({
-      undoStack: [...s.undoStack, { drawingId, prevDataUrl, newDataUrl }].slice(-50),
+      undoStack: [...s.undoStack, { type: "drawing" as const, drawingId, prevDataUrl, newDataUrl }].slice(-50),
       redoStack: [], // Clear redo on new action
     }));
+  },
+
+  pushProjectSnapshot: () => {
+    // Captura una referencia al project actual ANTES de mutarlo. Las
+    // acciones estructurales (addLayer, moveCell, etc.) deben llamar esto
+    // ANTES de hacer el `set(updateProject(...))`. Como el proyecto es
+    // inmutable (cada mutación produce un nuevo objeto), la referencia
+    // capturada sigue siendo el "estado previo" y se puede restaurar en
+    // undo sin necesidad de diffing.
+    set((s) => {
+      if (!s.project) return {};
+      return {
+        undoStack: [...s.undoStack, { type: "project" as const, prevProject: s.project }].slice(-50),
+        redoStack: [],
+      };
+    });
   },
 
   undo: () => {
     const s = get();
     if (s.undoStack.length === 0) return;
     const entry = s.undoStack[s.undoStack.length - 1];
-    // Restaurar el dataUrl anterior en el proyecto
-    set((st) => {
-      if (!st.project) return {};
-      if (!st.project.drawings[entry.drawingId]) return {};
-      const restored = {
-        ...st.project,
-        drawings: {
-          ...st.project.drawings,
-          [entry.drawingId]: {
-            ...st.project.drawings[entry.drawingId],
-            dataUrl: entry.prevDataUrl,
-            updatedAt: Date.now(),
+    if (entry.type === "drawing") {
+      // Restaurar el dataUrl anterior en el proyecto
+      set((st) => {
+        if (!st.project) return {};
+        if (!st.project.drawings[entry.drawingId]) return {};
+        const restored = {
+          ...st.project,
+          drawings: {
+            ...st.project.drawings,
+            [entry.drawingId]: {
+              ...st.project.drawings[entry.drawingId],
+              dataUrl: entry.prevDataUrl,
+              updatedAt: Date.now(),
+            },
           },
-        },
-        dirty: true,
-        updatedAt: Date.now(),
-      };
-      return {
-        project: restored,
-        undoStack: st.undoStack.slice(0, -1),
-        redoStack: [...st.redoStack, entry],
-        skipReloadOnHistory: false,
-      };
-    });
-    // Pre-cachear la imagen restaurada
-    import("./useDrawingEngine").then(({ preloadImage }) => {
-      preloadImage(entry.drawingId, entry.prevDataUrl);
-    });
+          dirty: true,
+          updatedAt: Date.now(),
+        };
+        return {
+          project: restored,
+          undoStack: st.undoStack.slice(0, -1),
+          redoStack: [...st.redoStack, entry],
+          skipReloadOnHistory: false,
+        };
+      });
+      // Pre-cachear la imagen restaurada
+      import("./useDrawingEngine").then(({ preloadImage }) => {
+        preloadImage(entry.drawingId, entry.prevDataUrl);
+      });
+    } else {
+      // entry.type === "project"
+      // Restaurar el project capturado en el snapshot. Como el project es
+      // inmutable, esta referencia sigue siendo el estado previo.
+      // IMPORTANTE: guardar el estado ACTUAL en redoStack ANTES de
+      // restaurar, así el redo puede volver adelante.
+      set((st) => {
+        const curProject = st.project;
+        if (!curProject) return {};
+        return {
+          project: entry.prevProject,
+          undoStack: st.undoStack.slice(0, -1),
+          // Para redo del snapshot de project, guardamos la versión QUE
+          // teníamos ANTES de restaurar (i.e., la post-mutación).
+          redoStack: [...st.redoStack, { type: "project" as const, prevProject: curProject }],
+          skipReloadOnHistory: false,
+        };
+      });
+    }
   },
 
   redo: () => {
     const s = get();
     if (s.redoStack.length === 0) return;
     const entry = s.redoStack[s.redoStack.length - 1];
-    set((st) => {
-      if (!st.project) return {};
-      if (!st.project.drawings[entry.drawingId]) return {};
-      const restored = {
-        ...st.project,
-        drawings: {
-          ...st.project.drawings,
-          [entry.drawingId]: {
-            ...st.project.drawings[entry.drawingId],
-            dataUrl: entry.newDataUrl,
-            updatedAt: Date.now(),
+    if (entry.type === "drawing") {
+      set((st) => {
+        if (!st.project) return {};
+        if (!st.project.drawings[entry.drawingId]) return {};
+        const restored = {
+          ...st.project,
+          drawings: {
+            ...st.project.drawings,
+            [entry.drawingId]: {
+              ...st.project.drawings[entry.drawingId],
+              dataUrl: entry.newDataUrl,
+              updatedAt: Date.now(),
+            },
           },
-        },
-        dirty: true,
-        updatedAt: Date.now(),
-      };
-      return {
-        project: restored,
-        redoStack: st.redoStack.slice(0, -1),
-        undoStack: [...st.undoStack, entry],
-        skipReloadOnHistory: false,
-      };
-    });
-    import("./useDrawingEngine").then(({ preloadImage }) => {
-      preloadImage(entry.drawingId, entry.newDataUrl);
-    });
+          dirty: true,
+          updatedAt: Date.now(),
+        };
+        return {
+          project: restored,
+          redoStack: st.redoStack.slice(0, -1),
+          undoStack: [...st.undoStack, entry],
+          skipReloadOnHistory: false,
+        };
+      });
+      import("./useDrawingEngine").then(({ preloadImage }) => {
+        preloadImage(entry.drawingId, entry.newDataUrl);
+      });
+    } else {
+      // entry.type === "project" — prevProject es la versión POST-mutación
+      // (la que guardamos cuando hicimos undo). La restauramos y guardamos
+      // el estado actual (pre-redo) en undoStack.
+      set((st) => {
+        const curProject = st.project;
+        if (!curProject) return {};
+        return {
+          project: entry.prevProject,
+          redoStack: st.redoStack.slice(0, -1),
+          undoStack: [...st.undoStack, { type: "project" as const, prevProject: curProject }],
+          skipReloadOnHistory: false,
+        };
+      });
+    }
   },
 
   canUndo: () => get().undoStack.length > 0,
