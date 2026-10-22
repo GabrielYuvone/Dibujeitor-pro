@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useCallback } from "react";
 import { useStore, getCurrentLayer } from "@/lib/animation/store";
 import { useDrawingEngine, getCachedImage, preloadImage } from "@/lib/animation/useDrawingEngine";
-import { findCellAtFrame, interpolateLayerTransform } from "@/lib/animation/utils";
+import { findCellAtFrame, getEffectiveLayerTransform } from "@/lib/animation/utils";
 import { executeActions, evalCondition } from "@/lib/animation/actions";
 import { screenToCanvas } from "@/lib/animation/drawing";
 
@@ -43,6 +43,11 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   const brush = useStore((s) => s.brush);
   const currentTool = useStore((s) => s.currentTool);
   const xModifier = useStore((s) => s.xModifier);
+  // layerDrafts: subscripción reactiva para que el componente re-renderice
+  // cuando el usuario arrastra con space o con el tool "move-layer".
+  // Sin esto, el draft se actualiza en el store pero CanvasStage no lo
+  // ve y el desplazamiento no se refleja visualmente durante el drag.
+  const layerDrafts = useStore((s) => s.layerDrafts);
   // spaceModifier: cuando está apretado el espacio, el engine entra en
   // modo "move-layer temporal". Necesitamos compositar la capa activa con
   // su transform aplicado para que el usuario vea el desplazamiento en
@@ -185,9 +190,14 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
 
       const img = getCachedImage(cell.drawingId);
       if (img && img.complete && img.naturalWidth > 0) {
-        // Transform interpolado de la capa en el frame actual.
-        // Permite animar posición/escala/rotación de la capa con keyframes.
-        const t = interpolateLayerTransform(layer, project.currentFrame);
+        // Transform EFECTIVO = interpolated (de keyframes) + draft (live).
+        // El draft es el offset que el usuario acumula arrastrando con
+        // espacio o con el tool "move-layer" sin commitear como keyframe.
+        const t = getEffectiveLayerTransform(
+          layer,
+          project.currentFrame,
+          useStore.getState().layerDrafts[layer.id]
+        );
         const hasTransform =
           t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
         ctx.globalAlpha = layer.opacity;
@@ -223,7 +233,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
         ctx.fillText(btn.label, btn.x + btn.width / 2, btn.y + btn.height / 2);
       }
     }
-  }, [project, onion, viewMode, playback.playing, currentTool, spaceModifier]);
+  }, [project, onion, viewMode, playback.playing, currentTool, spaceModifier, layerDrafts]);
 
   // ---------------------------------------------------------------------------
   // Dibujar overlay del placement de imagen (modo transformación)
@@ -508,6 +518,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     onion,
     compositeAll,
     engine,
+    layerDrafts,
   ]);
 
   // Recomponer al cambiar el proyecto (cualquier cambio)

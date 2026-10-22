@@ -2,7 +2,7 @@
 
 import React, { useMemo, useRef, useEffect, useState } from "react";
 import { useStore, getOrderedLayers } from "@/lib/animation/store";
-import { findCellAtFrame, totalFrames, formatFrame, interpolateLayerTransform } from "@/lib/animation/utils";
+import { findCellAtFrame, totalFrames, formatFrame } from "@/lib/animation/utils";
 import { Button } from "@/components/ui/button";
 import {
   Play,
@@ -47,7 +47,7 @@ export function Timeline() {
   const addLayer = useStore((s) => s.addLayer);
   const deleteLayer = useStore((s) => s.deleteLayer);
   const duplicateLayer = useStore((s) => s.duplicateLayer);
-  const setLayerTransformAtFrame = useStore((s) => s.setLayerTransformAtFrame);
+  const commitLayerDraftAsKeyframe = useStore((s) => s.commitLayerDraftAsKeyframe);
   const removeLayerTransformKeyframe = useStore((s) => s.removeLayerTransformKeyframe);
   const clearLayerTransformKeyframes = useStore((s) => s.clearLayerTransformKeyframes);
   const addMarker = useStore((s) => s.addMarker);
@@ -263,21 +263,18 @@ export function Timeline() {
           </Button>
           {/* Separador */}
           <div className="h-5 w-px bg-border mx-1" />
-          {/* Keyframe de transformación: captura la transformación actual
-              de la capa (offset/scale/rotation interpolados) en el frame
-              actual. Si ya existe un kf en este frame, lo actualiza. */}
+          {/* Keyframe de transformación: captura el transform EFECTIVO actual
+              (interpolado de kfs + draft del drag con space/tool) y lo commitea
+              como keyframe en el frame actual. Reset el draft a identidad. */}
           <Button
             size="sm"
             variant="ghost"
             className="h-7 px-2 text-xs"
-            title="Agregar keyframe de transform en el frame actual (mover/escalar/rotar capa)"
+            title="Agregar keyframe de transform en el frame actual (commitea el drag live)"
             disabled={!project.currentLayerId}
             onClick={() => {
               if (!project.currentLayerId) return;
-              const layer = project.layers.find((l) => l.id === project.currentLayerId);
-              if (!layer) return;
-              const t = interpolateLayerTransform(layer, project.currentFrame);
-              setLayerTransformAtFrame(project.currentLayerId, project.currentFrame, t);
+              commitLayerDraftAsKeyframe(project.currentLayerId, project.currentFrame);
             }}
           >
             <Diamond size={12} /> Keyframe

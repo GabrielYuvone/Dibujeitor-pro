@@ -431,14 +431,19 @@ export function useDrawingEngine({
       if (spaceModifierRef.current && proj.currentLayerId) {
         const spaceLayer = proj.layers.find((l) => l.id === proj.currentLayerId);
         if (spaceLayer) {
+          // El offset inicial visible = interpolated + draft actual.
+          // Si hay un draft acumulado de un drag anterior, lo respetamos
+          // (sino la capa "saltaría" al interpolado al empezar un nuevo
+          // drag).
           const t = interpolateLayerTransform(spaceLayer, proj.currentFrame);
+          const draft = useStore.getState().layerDrafts[spaceLayer.id];
           isMovingLayerRef.current = true;
           spaceDragHappenedRef.current = true;
           moveLayerStartRef.current = {
             startClientX: e.clientX,
             startClientY: e.clientY,
-            startOffsetX: t.offsetX,
-            startOffsetY: t.offsetY,
+            startOffsetX: t.offsetX + (draft?.offsetX ?? 0),
+            startOffsetY: t.offsetY + (draft?.offsetY ?? 0),
             layerId: proj.currentLayerId,
             frame: proj.currentFrame,
           };
@@ -563,21 +568,24 @@ export function useDrawingEngine({
       }
 
       // --- Herramienta "Mover capa" — arrastra la capa actual ---
-      // En pointerdown registramos el offset inicial (interpolado en este
-      // frame) y el clientX/Y inicial. En pointermove sumamos el delta
-      // (convertido a canvas coords dividiendo por zoom) al offset inicial
-      // y llamamos a setLayerTransformAtFrame para crear/actualizar el kf.
+      // En pointerdown registramos el offset inicial visible
+      // (interpolated + draft acumulado) y el clientX/Y inicial.
+      // En pointermove sumamos el delta (convertido a canvas coords
+      // dividiendo por zoom) y actualizamos el draft (preview live).
+      // NO creamos keyframe — el usuario lo commitea manualmente con el
+      // botón "Keyframe" (commitLayerDraftAsKeyframe).
       if (tool === "move-layer") {
         if (!proj.currentLayerId) return;
         const layer = proj.layers.find((l) => l.id === proj.currentLayerId);
         if (!layer) return;
         const t = interpolateLayerTransform(layer, proj.currentFrame);
+        const draft = useStore.getState().layerDrafts[layer.id];
         isMovingLayerRef.current = true;
         moveLayerStartRef.current = {
           startClientX: e.clientX,
           startClientY: e.clientY,
-          startOffsetX: t.offsetX,
-          startOffsetY: t.offsetY,
+          startOffsetX: t.offsetX + (draft?.offsetX ?? 0),
+          startOffsetY: t.offsetY + (draft?.offsetY ?? 0),
           layerId: proj.currentLayerId,
           frame: proj.currentFrame,
         };
@@ -803,7 +811,13 @@ export function useDrawingEngine({
         return;
       }
 
-      // Mover capa (herramienta "move-layer" en drag)
+      // Mover capa (herramienta "move-layer" en drag, o space+drag)
+      // IMPORTANTE: NO creamos un keyframe automáticamente. Solo
+      // actualizamos el draft transform (en memoria, no persistido).
+      // El rendering aplica el draft como offset adicional a la
+      // interpolación de keyframes existentes. El usuario commitea
+      // el draft como keyframe recién cuando presiona el botón
+      // "Keyframe" (que llama a commitLayerDraftAsKeyframe).
       if (isMovingLayerRef.current && moveLayerStartRef.current) {
         const start = moveLayerStartRef.current;
         const dx = e.clientX - start.startClientX;
@@ -811,12 +825,12 @@ export function useDrawingEngine({
         // Convertir delta de pantalla a coords de canvas dividiendo por zoom.
         // El zoom está en canvasViewRef.
         const zoom = activeCanvasViewRef.current.zoom || 1;
-        const newOffsetX = start.startOffsetX + dx / zoom;
-        const newOffsetY = start.startOffsetY + dy / zoom;
-        // Actualizar/crear el keyframe en el frame actual.
-        useStore.getState().setLayerTransformAtFrame(start.layerId, start.frame, {
-          offsetX: newOffsetX,
-          offsetY: newOffsetY,
+        const draftOffsetX = start.startOffsetX + dx / zoom;
+        const draftOffsetY = start.startOffsetY + dy / zoom;
+        // Actualizar el draft (preview live, sin tocar el project).
+        useStore.getState().setLayerDraft(start.layerId, {
+          offsetX: draftOffsetX,
+          offsetY: draftOffsetY,
           scale: 1,        // por ahora solo offset — scale y rotation se editan
                            // desde otros controles (TODO: handles visuales)
           rotation: 0,

@@ -159,3 +159,32 @@ export function interpolateLayerTransform(
   const k = sorted[0];
   return { offsetX: k.offsetX, offsetY: k.offsetY, scale: k.scale, rotation: k.rotation };
 }
+
+/**
+ * Transform EFECTIVO de una capa en un frame = interpolated + draft.
+ *
+ * El draft es un offset "live" que el usuario acumula arrastrando la capa
+ * con espacio o con el tool "move-layer". NO es un keyframe (no se persiste
+ * al guardar el proyecto). El rendering usa esta función para mostrar la
+ * capa en la posición visible actual (keyframes interpolados + draft).
+ *
+ * Para commitear el draft como keyframe, el usuario debe usar el botón
+ * "Keyframe" (que llama a `commitLayerDraftAsKeyframe` en el store).
+ *
+ * Sumamos offset y rotation; multiplicamos scale (igual que composing
+ * transforms en matrices).
+ */
+export function getEffectiveLayerTransform(
+  layer: { transformKeyframes?: Layer["transformKeyframes"] },
+  frame: number,
+  draft?: { offsetX: number; offsetY: number; scale: number; rotation: number }
+): { offsetX: number; offsetY: number; scale: number; rotation: number } {
+  const interp = interpolateLayerTransform(layer, frame);
+  if (!draft) return interp;
+  return {
+    offsetX: interp.offsetX + draft.offsetX,
+    offsetY: interp.offsetY + draft.offsetY,
+    scale: interp.scale * draft.scale,
+    rotation: interp.rotation + draft.rotation,
+  };
+}

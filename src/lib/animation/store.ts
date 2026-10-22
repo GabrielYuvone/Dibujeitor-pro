@@ -26,7 +26,7 @@ import type {
   AudioClip,
 } from "./types";
 import { DEFAULT_BRUSH, DEFAULT_ONION, DEFAULT_SETTINGS, createBlankProject } from "./defaults";
-import { genId, totalFrames } from "./utils";
+import { genId, totalFrames, interpolateLayerTransform } from "./utils";
 import {
   deleteProjectFromDb,
   listProjectsFromDb,
@@ -73,6 +73,9 @@ interface AppState {
   spaceModifier: boolean;
   toolSettings: Record<string, Partial<BrushSettings>>;
   customPalette: string[];
+  // Drafts de transform por capa (no persistidos). Ver comentario en el
+  // estado inicial para más detalle.
+  layerDrafts: Record<string, { offsetX: number; offsetY: number; scale: number; rotation: number }>;
 
   // Selección temporal (texto activo)
   drawingBuffer: HTMLCanvasElement | null;
@@ -148,6 +151,18 @@ interface AppState {
   ) => void;
   removeLayerTransformKeyframe: (layerId: ID, frame: number) => void;
   clearLayerTransformKeyframes: (layerId: ID) => void;
+  // Draft transform: preview "live" del offset aplicado a una capa
+  // cuando el usuario arrastra con space o con el tool "move-layer".
+  // NO se persiste al guardar el proyecto. Para commitear el draft como
+  // keyframe, el usuario debe presionar el botón "Keyframe" (que llama a
+  // commitLayerDraftAsKeyframe). Esto separa "mover libremente" de
+  // "animar con keyframes" como pidió el usuario.
+  setLayerDraft: (
+    layerId: ID,
+    transform: { offsetX: number; offsetY: number; scale: number; rotation: number }
+  ) => void;
+  clearLayerDraft: (layerId: ID) => void;
+  commitLayerDraftAsKeyframe: (layerId: ID, frame: number) => void;
 
   // Cells / drawings
   ensureDrawingForCell: (layerId: ID, frame: number) => Promise<ID>;
@@ -323,6 +338,13 @@ export const useStore = create<AppState>((set, get) => ({
   spaceModifier: false,
   toolSettings: {} as Record<string, Partial<BrushSettings>>,
   customPalette: [] as string[],
+  // Drafts de transformación por capa (no persistidos). Cuando el usuario
+  // arrastra una capa con space o con el tool "move-layer", se acumula acá
+  // el offset "live". El rendering aplica interpolated transform + draft.
+  // Si el usuario quiere guardarlo como keyframe, llama al botón "Keyframe"
+  // (commitLayerDraftAsKeyframe) que captura interpolated + draft como
+  // keyframe en el frame actual y resetea el draft.
+  layerDrafts: {} as Record<string, { offsetX: number; offsetY: number; scale: number; rotation: number }>,
   // Pilas de undo/redo (no persistidas)
   undoStack: [] as HistoryEntry[],
   redoStack: [] as HistoryEntry[],
@@ -672,6 +694,71 @@ export const useStore = create<AppState>((set, get) => ({
         l.id === layerId ? { ...l, transformKeyframes: [] } : l
       ),
     })));
+  },
+
+  // -------------------------------------------------------------------------
+  // Draft transform (preview "live" del offset; no crea keyframe hasta
+  // que el usuario lo commitea explícitamente con el botón "Keyframe")
+  // -------------------------------------------------------------------------
+
+  setLayerDraft: (layerId, transform) => {
+    // Solo actualiza el draft en memoria — no toca el project ni el undo.
+    // El rendering aplica (interpolated + draft) para mostrar el preview.
+    set((s) => ({
+      layerDrafts: { ...s.layerDrafts, [layerId]: transform },
+    }));
+  },
+
+  clearLayerDraft: (layerId) => {
+    set((s) => {
+      const next = { ...s.layerDrafts };
+      delete next[layerId];
+      return { layerDrafts: next };
+    });
+  },
+
+  commitLayerDraftAsKeyframe: (layerId, frame) => {
+    // Captura el transform ACTUAL (interpolated + draft) como keyframe
+    // en el frame actual y resetea el draft a identidad. Así el usuario
+    // puede arrastrar libremente sin crear keyframes automáticamente y
+    // commitear solo cuando lo decide.
+    const state = get();
+    if (!state.project) return;
+    const layer = state.project.layers.find((l) => l.id === layerId);
+    if (!layer) return;
+    const draft = state.layerDrafts[layerId];
+    // interp = transform interpolado en este frame (de los kfs existentes)
+    const interp = interpolateLayerTransform(layer, frame);
+    // final = interp + draft (suma en offset y rotation, multiplica scale)
+    const finalTransform = {
+      offsetX: interp.offsetX + (draft?.offsetX ?? 0),
+      offsetY: interp.offsetY + (draft?.offsetY ?? 0),
+      scale: interp.scale * (draft?.scale ?? 1),
+      rotation: interp.rotation + (draft?.rotation ?? 0),
+    };
+    // Push snapshot ANTES de mutar el project (para que sea deshacerable)
+    get().pushProjectSnapshot();
+    set(updateProject(state, (p) => ({
+      ...p,
+      layers: p.layers.map((l) => {
+        if (l.id !== layerId) return l;
+        const kfs = [...(l.transformKeyframes ?? [])];
+        const idx = kfs.findIndex((k) => k.frame === frame);
+        const newKf = { frame, ...finalTransform };
+        if (idx >= 0) kfs[idx] = newKf;
+        else {
+          kfs.push(newKf);
+          kfs.sort((a, b) => a.frame - b.frame);
+        }
+        return { ...l, transformKeyframes: kfs };
+      }),
+    })));
+    // Resetear el draft — el offset ahora está "bakeado" en el keyframe.
+    set((s) => {
+      const next = { ...s.layerDrafts };
+      delete next[layerId];
+      return { layerDrafts: next };
+    });
   },
 
   // -------------------------------------------------------------------------
