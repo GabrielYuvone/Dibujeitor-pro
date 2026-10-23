@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { useStore, getOrderedLayers } from "@/lib/animation/store";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,6 +45,9 @@ export function LayersPanel() {
   // Drag state para reordenar
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  // Flag para evitar que onClick dispare después de un drag (el browser
+  // fire click después de drag si no resultó en drop).
+  const dragHappenedRef = useRef(false);
 
   if (!project) return null;
 
@@ -134,12 +137,16 @@ export function LayersPanel() {
             key={layer.id}
             draggable
             onDragStart={(e) => {
+              dragHappenedRef.current = true;
               setDraggingId(layer.id);
               e.dataTransfer.effectAllowed = "move";
             }}
             onDragEnd={() => {
               setDraggingId(null);
               setDragOverId(null);
+              // Reset el flag después de un breve delay para que el onClick
+              // que el browser dispare tenga tiempo de verlo.
+              setTimeout(() => { dragHappenedRef.current = false; }, 50);
             }}
             onDragOver={(e) => {
               e.preventDefault();
@@ -172,6 +179,9 @@ export function LayersPanel() {
               dragOverId === layer.id && draggingId !== layer.id ? "border-t-2 border-t-primary" : ""
             } ${draggingId === layer.id ? "opacity-40" : ""}`}
             onClick={(e) => {
+              // Si acaba de pasar un drag, ignorar el click (el browser
+              // fire click después de drag si no resultó en drop).
+              if (dragHappenedRef.current) return;
               selectLayer(layer.id);
               // Multi-selección: Shift=rango, Ctrl=toggle, click=único
               if (e.shiftKey) {
@@ -234,10 +244,12 @@ export function LayersPanel() {
             </button>
             <span className="text-muted-foreground">{layerIcon(layer.type)}</span>
             <input
+              draggable={false}
               className="flex-1 bg-transparent outline-none text-xs min-w-0"
               value={layer.name}
               onChange={(e) => renameLayer(layer.id, e.target.value)}
               onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
             />
             <div className="flex items-center gap-1">
               <button

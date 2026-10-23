@@ -463,36 +463,56 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
       const pt = getCanvasPointSimple(e.clientX, e.clientY);
       if (!pt) return false;
       const { x, y, width: w, height: h } = imagePlacement;
-      const handleSize = 14; // área de click para los handles (más grande que el visual)
-      // Verificar si el click está en algún corner handle
-      const inTL = pt.x >= x - handleSize / 2 && pt.x <= x + handleSize / 2 &&
-                   pt.y >= y - handleSize / 2 && pt.y <= y + handleSize / 2;
-      const inTR = pt.x >= x + w - handleSize / 2 && pt.x <= x + w + handleSize / 2 &&
-                   pt.y >= y - handleSize / 2 && pt.y <= y + handleSize / 2;
-      const inBL = pt.x >= x - handleSize / 2 && pt.x <= x + handleSize / 2 &&
-                   pt.y >= y + h - handleSize / 2 && pt.y <= y + h + handleSize / 2;
-      const inBR = pt.x >= x + w - handleSize / 2 && pt.x <= x + w + handleSize / 2 &&
-                   pt.y >= y + h - handleSize / 2 && pt.y <= y + h + handleSize / 2;
-      const inImage = pt.x >= x && pt.x <= x + w && pt.y >= y && pt.y <= y + h;
-
-      // Handle de rotación: está arriba del top-center, a 24px del borde.
-      // Si hay rotación, rotar la posición del handle alrededor del centro.
+      const handleSize = 14;
       const cx = x + w / 2;
       const cy = y + h / 2;
-      const rot = (imagePlacement.rotation ?? 0) * Math.PI / 180;
-      const rotHx_local = 0;           // relativo al centro, sin rotar
-      const rotHy_local = -h / 2 - 24; // arriba del top-center
-      const rotHx = cx + rotHx_local * Math.cos(rot) - rotHy_local * Math.sin(rot);
-      const rotHy = cy + rotHx_local * Math.sin(rot) + rotHy_local * Math.cos(rot);
-      const inRotate = Math.sqrt((pt.x - rotHx) ** 2 + (pt.y - rotHy) ** 2) <= 12;
+      const rotRad = (imagePlacement.rotation ?? 0) * Math.PI / 180;
+      const cos = Math.cos(rotRad);
+      const sin = Math.sin(rotRad);
 
+      // Helper: rotar un punto local (relativo al centro) a coords del canvas
+      const rotatePoint = (lx: number, ly: number) => ({
+        x: cx + lx * cos - ly * sin,
+        y: cy + lx * sin + ly * cos,
+      });
+
+      // Corner handles en coords locales (relativo al centro)
+      const corners = [
+        { local: { x: -w / 2, y: -h / 2 }, mode: "scale-tl" as const },
+        { local: { x: w / 2, y: -h / 2 }, mode: "scale-tr" as const },
+        { local: { x: -w / 2, y: h / 2 }, mode: "scale-bl" as const },
+        { local: { x: w / 2, y: h / 2 }, mode: "scale-br" as const },
+      ];
+
+      // Verificar si el click está cerca de algún corner handle (rotado)
       let mode: typeof placementModeRef.current = "none";
-      if (inRotate) mode = "rotate";
-      else if (inTL) mode = "scale-tl";
-      else if (inTR) mode = "scale-tr";
-      else if (inBL) mode = "scale-bl";
-      else if (inBR) mode = "scale-br";
-      else if (inImage) mode = "move";
+      for (const c of corners) {
+        const p = rotatePoint(c.local.x, c.local.y);
+        const dist = Math.sqrt((pt.x - p.x) ** 2 + (pt.y - p.y) ** 2);
+        if (dist <= handleSize) {
+          mode = c.mode;
+          break;
+        }
+      }
+
+      // Handle de rotación (rotado)
+      if (mode === "none") {
+        const rotP = rotatePoint(0, -h / 2 - 24);
+        const dist = Math.sqrt((pt.x - rotP.x) ** 2 + (pt.y - rotP.y) ** 2);
+        if (dist <= 12) mode = "rotate";
+      }
+
+      // Click dentro de la imagen (usar bounding box rotado aproximado)
+      if (mode === "none") {
+        // Inverse-rotate the click point to check if it's inside the unrotated rect
+        const dx = pt.x - cx;
+        const dy = pt.y - cy;
+        const ix = dx * cos + dy * sin;  // inverse rotation
+        const iy = -dx * sin + dy * cos;
+        if (ix >= -w / 2 && ix <= w / 2 && iy >= -h / 2 && iy <= h / 2) {
+          mode = "move";
+        }
+      }
 
       if (mode === "none") return false;
 
