@@ -22,6 +22,7 @@ import {
   ChevronRight,
   GitMerge,
   GripVertical,
+  SquareSplitVertical as MaskIcon,
 } from "lucide-react";
 import type { LayerType } from "@/lib/animation/types";
 
@@ -33,6 +34,7 @@ export function LayersPanel() {
   const renameLayer = useStore((s) => s.renameLayer);
   const toggleLayerVisible = useStore((s) => s.toggleLayerVisible);
   const toggleLayerLocked = useStore((s) => s.toggleLayerLocked);
+  const toggleLayerMask = useStore((s) => s.toggleLayerMask);
   const setLayerOpacity = useStore((s) => s.setLayerOpacity);
   const moveLayer = useStore((s) => s.moveLayer);
   const moveLayerToIndex = useStore((s) => s.moveLayerToIndex);
@@ -251,6 +253,20 @@ export function LayersPanel() {
               onPointerDown={(e) => e.stopPropagation()}
             />
             <div className="flex items-center gap-1">
+              <button
+                className={`p-1 rounded transition-colors ${
+                  layer.isMask
+                    ? "bg-cyan-500/30 text-cyan-500 hover:bg-cyan-500/40"
+                    : "hover:bg-muted text-muted-foreground"
+                }`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleLayerMask(layer.id);
+                }}
+                title={layer.isMask ? "Quitar máscara" : "Convertir en máscara de la capa de abajo"}
+              >
+                <MaskIcon size={14} />
+              </button>
               <button
                 className={`p-1 rounded transition-colors ${
                   layer.loopRange

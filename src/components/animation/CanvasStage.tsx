@@ -228,8 +228,12 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     }
 
     // Capas (de abajo hacia arriba — la primera capa está en el fondo)
-    for (const layer of project.layers) {
+    for (let li = 0; li < project.layers.length; li++) {
+      const layer = project.layers[li];
       if (!layer.visible || layer.type === "audio") continue;
+      // Las capas marcadas como isMask no se renderizan solas — se usan
+      // para clipping de la capa directamente debajo (li-1).
+      if (layer.isMask) continue;
       // En edit mode, excluir la capa activa del composited
       if (excludeActiveLayer && layer.id === activeLayerId) continue;
       const cell = findCellAtFrame(layer.cells, project.currentFrame, layer.loopRange);
@@ -237,11 +241,12 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
       const drawing = project.drawings[cell.drawingId];
       if (!drawing) continue;
 
+      // ¿La capa de arriba (li+1) es una máscara para esta capa?
+      const maskLayer = (li + 1 < project.layers.length && project.layers[li + 1].isMask)
+        ? project.layers[li + 1] : null;
+
       const img = getCachedImage(cell.drawingId);
       if (img && img.complete && img.naturalWidth > 0) {
-        // Transform EFECTIVO = interpolated (de keyframes) + draft (live).
-        // El draft es el offset que el usuario acumula arrastrando con
-        // espacio o con el tool "move-layer" sin commitear como keyframe.
         const t = getEffectiveLayerTransform(
           layer,
           project.currentFrame,
@@ -249,29 +254,65 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
         );
         const hasTransform =
           t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
-        ctx.globalAlpha = layer.opacity;
-        if (hasTransform) {
-          // Rotar/escalar alrededor del CENTRO del bitmap (no del canvas
-          // visible). Esto coincide con el transform-origin "50% 50%" del
-          // drawingCanvas, así el rendering del composited y del drawingCanvas
-          // coinciden incluso cuando el bitmap está expandido (más grande
-          // que project.settings).
-          ctx.save();
-          // Mover al top-left del bitmap (con offset)
-          ctx.translate(t.offsetX, t.offsetY);
-          // Mover al centro del bitmap (pivote de rotación/escala)
-          ctx.translate(drawing.width / 2, drawing.height / 2);
-          if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
-          if (t.scale !== 1) ctx.scale(t.scale, t.scale);
-          // Dibujar imagen centrada en el pivote actual
-          ctx.drawImage(img, -drawing.width / 2, -drawing.height / 2, drawing.width, drawing.height);
-          ctx.restore();
-        } else {
-          // Sin transform — drawImage a tamaño natural. Si el bitmap es
-          // más grande que project.settings, se clipa al composited canvas
-          // automáticamente (que es de tamaño project.settings).
-          ctx.drawImage(img, 0, 0, drawing.width, drawing.height);
+
+        // Si hay máscara, renderizar a un canvas temporal y aplicar la máscara
+        // antes de dibujar al composited.
+        let targetCtx = ctx;
+        let tempCanvas: HTMLCanvasElement | null = null;
+        if (maskLayer && maskLayer.visible) {
+          tempCanvas = document.createElement("canvas");
+          tempCanvas.width = c.width;
+          tempCanvas.height = c.height;
+          targetCtx = tempCanvas.getContext("2d")!;
         }
+
+        targetCtx.globalAlpha = layer.opacity;
+        if (hasTransform) {
+          targetCtx.save();
+          targetCtx.translate(t.offsetX, t.offsetY);
+          targetCtx.translate(drawing.width / 2, drawing.height / 2);
+          if (t.rotation !== 0) targetCtx.rotate((t.rotation * Math.PI) / 180);
+          if (t.scale !== 1) targetCtx.scale(t.scale, t.scale);
+          targetCtx.drawImage(img, -drawing.width / 2, -drawing.height / 2, drawing.width, drawing.height);
+          targetCtx.restore();
+        } else {
+          targetCtx.drawImage(img, 0, 0, drawing.width, drawing.height);
+        }
+
+        // Aplicar máscara si existe
+        if (maskLayer && maskLayer.visible && tempCanvas) {
+          const maskCell = findCellAtFrame(maskLayer.cells, project.currentFrame, maskLayer.loopRange);
+          if (maskCell?.drawingId) {
+            const maskDrawing = project.drawings[maskCell.drawingId];
+            const maskImg = getCachedImage(maskCell.drawingId);
+            if (maskDrawing && maskImg && maskImg.complete) {
+              // destination-in: keeps only where BOTH tempCanvas and mask are opaque
+              targetCtx.globalCompositeOperation = "destination-in";
+              targetCtx.globalAlpha = maskLayer.opacity;
+              const mt = getEffectiveLayerTransform(
+                maskLayer,
+                project.currentFrame,
+                useStore.getState().layerDrafts[maskLayer.id]
+              );
+              if (mt.offsetX !== 0 || mt.offsetY !== 0 || mt.scale !== 1 || mt.rotation !== 0) {
+                targetCtx.save();
+                targetCtx.translate(mt.offsetX, mt.offsetY);
+                targetCtx.translate(maskDrawing.width / 2, maskDrawing.height / 2);
+                if (mt.rotation !== 0) targetCtx.rotate((mt.rotation * Math.PI) / 180);
+                if (mt.scale !== 1) targetCtx.scale(mt.scale, mt.scale);
+                targetCtx.drawImage(maskImg, -maskDrawing.width / 2, -maskDrawing.height / 2, maskDrawing.width, maskDrawing.height);
+                targetCtx.restore();
+              } else {
+                targetCtx.drawImage(maskImg, 0, 0, maskDrawing.width, maskDrawing.height);
+              }
+              targetCtx.globalCompositeOperation = "source-over";
+              targetCtx.globalAlpha = 1;
+            }
+          }
+          // Dibujar el temp canvas (con máscara aplicada) al composited
+          ctx.drawImage(tempCanvas, 0, 0);
+        }
+        ctx.globalAlpha = 1;
       }
     }
     ctx.globalAlpha = 1;

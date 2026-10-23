@@ -148,6 +148,11 @@ export interface Layer {
   parentId?: ID | null;
   frameLabels?: Record<number, KeyframeType>;
   createdAt: number;
+  // Si isMask = true, esta capa es una MÁSCARA para la capa directamente
+  // debajo (en el orden del array project.layers). Donde la máscara tenga
+  // contenido (alpha > 0), la capa de abajo es visible. Donde la máscara
+  // es transparente, la capa de abajo se oculta.
+  isMask?: boolean;
   // Rango de bucle de la capa. Si está definido, la capa se repite dentro
   // de este rango al reproducir/exportar (útil para ciclos de caminata, etc.).
   loopRange?: { start: number; end: number; count: number } | null;

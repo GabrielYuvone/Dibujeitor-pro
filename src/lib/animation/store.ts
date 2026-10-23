@@ -150,6 +150,7 @@ interface AppState {
   renameLayer: (id: ID, name: string) => void;
   toggleLayerVisible: (id: ID) => void;
   toggleLayerLocked: (id: ID) => void;
+  toggleLayerMask: (id: ID) => void;
   setLayerOpacity: (id: ID, opacity: number) => void;
   moveLayer: (id: ID, dir: "up" | "down") => void;
   // Mover una capa a una posición específica (para drag-and-drop reorder)
@@ -711,6 +712,16 @@ export const useStore = create<AppState>((set, get) => ({
     set(updateProject(state, (p) => ({
       ...p,
       layers: p.layers.map((l) => (l.id === id ? { ...l, locked: !l.locked } : l)),
+    })));
+  },
+
+  toggleLayerMask: (id) => {
+    const state = get();
+    if (!state.project) return;
+    get().pushProjectSnapshot();
+    set(updateProject(state, (p) => ({
+      ...p,
+      layers: p.layers.map((l) => (l.id === id ? { ...l, isMask: !l.isMask } : l)),
     })));
   },
 
