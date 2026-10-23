@@ -82,7 +82,7 @@ export function ProjectManager() {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground overflow-auto">
+    <div className="h-screen bg-background text-foreground overflow-y-auto">
       <div className="max-w-5xl mx-auto px-6 py-8">
         {/* Header con logo grande */}
         <header className="mb-8 flex flex-col items-center text-center">
