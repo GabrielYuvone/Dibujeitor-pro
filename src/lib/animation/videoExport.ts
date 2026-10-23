@@ -125,34 +125,74 @@ async function renderFrameToBlob(
   ctx.fillStyle = bgColor;
   ctx.fillRect(0, 0, width, height);
 
-  // Componer capas
-  for (const layer of project.layers) {
+  // Componer capas (con soporte de máscaras)
+  for (let li = 0; li < project.layers.length; li++) {
+    const layer = project.layers[li];
     if (!layer.visible || layer.type === "audio") continue;
+    if (layer.isMask) continue;
     const cell = findCellAtFrame(layer.cells, frame, layer.loopRange);
     if (!cell || !cell.drawingId) continue;
     const drawing = project.drawings[cell.drawingId];
     if (!drawing) continue;
+
+    // ¿La capa de arriba es una máscara?
+    const maskLayer = (li + 1 < project.layers.length && project.layers[li + 1].isMask)
+      ? project.layers[li + 1] : null;
+
     const img = getCachedImage(cell.drawingId);
     if (img && img.complete && img.naturalWidth > 0) {
-      ctx.globalAlpha = layer.opacity;
+      let targetCtx = ctx;
+      let tempCanvas: HTMLCanvasElement | null = null;
+      if (maskLayer) {
+        tempCanvas = document.createElement("canvas");
+        tempCanvas.width = width;
+        tempCanvas.height = height;
+        targetCtx = tempCanvas.getContext("2d")!;
+      }
+
+      targetCtx.globalAlpha = layer.opacity;
       const t = interpolateLayerTransform(layer, frame);
       const hasTransform =
         t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
-      // Dibujar a tamaño NATURAL del drawing (no estirado a width×height).
-      // Si el bitmap es más grande que el canvas (expandido), se clipa
-      // automáticamente — solo se ve la parte que entra en el canvas.
-      // Si es igual al canvas, entra perfecto sin deformación.
       if (hasTransform) {
-        ctx.save();
-        ctx.translate(t.offsetX, t.offsetY);
-        ctx.translate(drawing.width / 2, drawing.height / 2);
-        if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
-        if (t.scale !== 1) ctx.scale(t.scale, t.scale);
-        ctx.drawImage(img, -drawing.width / 2, -drawing.height / 2, drawing.width, drawing.height);
-        ctx.restore();
+        targetCtx.save();
+        targetCtx.translate(t.offsetX, t.offsetY);
+        targetCtx.translate(drawing.width / 2, drawing.height / 2);
+        if (t.rotation !== 0) targetCtx.rotate((t.rotation * Math.PI) / 180);
+        if (t.scale !== 1) targetCtx.scale(t.scale, t.scale);
+        targetCtx.drawImage(img, -drawing.width / 2, -drawing.height / 2, drawing.width, drawing.height);
+        targetCtx.restore();
       } else {
-        ctx.drawImage(img, 0, 0, drawing.width, drawing.height);
+        targetCtx.drawImage(img, 0, 0, drawing.width, drawing.height);
       }
+
+      // Aplicar máscara
+      if (maskLayer && tempCanvas) {
+        const maskCell = findCellAtFrame(maskLayer.cells, frame, maskLayer.loopRange);
+        if (maskCell?.drawingId) {
+          const maskDrawing = project.drawings[maskCell.drawingId];
+          const maskImg = getCachedImage(maskCell.drawingId);
+          if (maskDrawing && maskImg && maskImg.complete) {
+            targetCtx.globalCompositeOperation = "destination-in";
+            targetCtx.globalAlpha = 1;
+            const mt = interpolateLayerTransform(maskLayer, frame);
+            if (mt.offsetX !== 0 || mt.offsetY !== 0 || mt.scale !== 1 || mt.rotation !== 0) {
+              targetCtx.save();
+              targetCtx.translate(mt.offsetX, mt.offsetY);
+              targetCtx.translate(maskDrawing.width / 2, maskDrawing.height / 2);
+              if (mt.rotation !== 0) targetCtx.rotate((mt.rotation * Math.PI) / 180);
+              if (mt.scale !== 1) targetCtx.scale(mt.scale, mt.scale);
+              targetCtx.drawImage(maskImg, -maskDrawing.width / 2, -maskDrawing.height / 2, maskDrawing.width, maskDrawing.height);
+              targetCtx.restore();
+            } else {
+              targetCtx.drawImage(maskImg, 0, 0, maskDrawing.width, maskDrawing.height);
+            }
+            targetCtx.globalCompositeOperation = "source-over";
+          }
+        }
+        ctx.drawImage(tempCanvas, 0, 0);
+      }
+      ctx.globalAlpha = 1;
     }
   }
   ctx.globalAlpha = 1;
@@ -362,29 +402,54 @@ export async function exportWebM(
     // Render frame
     ctx.fillStyle = options.backgroundColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    for (const layer of project.layers) {
+    for (let li = 0; li < project.layers.length; li++) {
+      const layer = project.layers[li];
       if (!layer.visible || layer.type === "audio") continue;
+      if (layer.isMask) continue;
       const cell = findCellAtFrame(layer.cells, frame, layer.loopRange);
       if (!cell || !cell.drawingId) continue;
       const drawing = project.drawings[cell.drawingId];
       if (!drawing) continue;
+      const maskLayer = (li + 1 < project.layers.length && project.layers[li + 1].isMask)
+        ? project.layers[li + 1] : null;
       const img = getCachedImage(cell.drawingId);
       if (img && img.complete && img.naturalWidth > 0) {
-        ctx.globalAlpha = layer.opacity;
-        const t = interpolateLayerTransform(layer, frame);
-        const hasTransform =
-          t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
-        if (hasTransform) {
-          ctx.save();
-          ctx.translate(t.offsetX, t.offsetY);
-          ctx.translate(drawing.width / 2, drawing.height / 2);
-          if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
-          if (t.scale !== 1) ctx.scale(t.scale, t.scale);
-          ctx.drawImage(img, -drawing.width / 2, -drawing.height / 2, drawing.width, drawing.height);
-          ctx.restore();
-        } else {
-          ctx.drawImage(img, 0, 0, drawing.width, drawing.height);
+        let targetCtx = ctx;
+        let tempCanvas: HTMLCanvasElement | null = null;
+        if (maskLayer) {
+          tempCanvas = document.createElement("canvas");
+          tempCanvas.width = canvas.width;
+          tempCanvas.height = canvas.height;
+          targetCtx = tempCanvas.getContext("2d")!;
         }
+        targetCtx.globalAlpha = layer.opacity;
+        const t = interpolateLayerTransform(layer, frame);
+        if (t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0) {
+          targetCtx.save();
+          targetCtx.translate(t.offsetX, t.offsetY);
+          targetCtx.translate(drawing.width / 2, drawing.height / 2);
+          if (t.rotation !== 0) targetCtx.rotate((t.rotation * Math.PI) / 180);
+          if (t.scale !== 1) targetCtx.scale(t.scale, t.scale);
+          targetCtx.drawImage(img, -drawing.width / 2, -drawing.height / 2, drawing.width, drawing.height);
+          targetCtx.restore();
+        } else {
+          targetCtx.drawImage(img, 0, 0, drawing.width, drawing.height);
+        }
+        if (maskLayer && tempCanvas) {
+          const maskCell = findCellAtFrame(maskLayer.cells, frame, maskLayer.loopRange);
+          if (maskCell?.drawingId) {
+            const maskDrawing = project.drawings[maskCell.drawingId];
+            const maskImg = getCachedImage(maskCell.drawingId);
+            if (maskDrawing && maskImg && maskImg.complete) {
+              targetCtx.globalCompositeOperation = "destination-in";
+              targetCtx.globalAlpha = 1;
+              targetCtx.drawImage(maskImg, 0, 0, maskDrawing.width, maskDrawing.height);
+              targetCtx.globalCompositeOperation = "source-over";
+            }
+          }
+          ctx.drawImage(tempCanvas, 0, 0);
+        }
+        ctx.globalAlpha = 1;
       }
     }
     ctx.globalAlpha = 1;

@@ -279,8 +279,10 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           targetCtx.drawImage(img, 0, 0, drawing.width, drawing.height);
         }
 
-        // Aplicar máscara si existe
-        if (maskLayer && maskLayer.visible && tempCanvas) {
+        // Aplicar máscara si existe. La máscara funciona INCLUSO si la capa
+        // máscara tiene visible=false (como en After Effects, donde el matte
+        // se oculta pero sigue funcionando).
+        if (maskLayer && tempCanvas) {
           const maskCell = findCellAtFrame(maskLayer.cells, project.currentFrame, maskLayer.loopRange);
           if (maskCell?.drawingId) {
             const maskDrawing = project.drawings[maskCell.drawingId];
@@ -708,10 +710,13 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   useEffect(() => {
     if (!project) return;
     const all = Object.values(project.drawings);
-    for (const d of all) {
-      preloadImage(d.id, d.dataUrl);
-    }
-  }, [project?.drawings]);
+    // Pre-cargar todas las imágenes y DESPUÉS re-componer. Sin esto,
+    // las imágenes de capas máscara podrían no estar cacheadas cuando
+    // compositeAll corre la primera vez → la máscara no se aplica.
+    Promise.all(all.map((d) => preloadImage(d.id, d.dataUrl))).then(() => {
+      compositeAll();
+    });
+  }, [project?.drawings, compositeAll]);
 
   // ---------------------------------------------------------------------------
   // Efecto: cargar drawing activo + componer (en edit mode)
