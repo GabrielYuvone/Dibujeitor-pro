@@ -572,11 +572,54 @@ export function useDrawingEngine({
         return;
       }
 
-      // Para herramientas que sólo necesitan "leer" (selection, transform sin paste)
-      // no creamos un drawing nuevo automáticamente
+      // --- Herramientas Selection / Transform ---
+      // Si hay una selección activa y el click cae DENTRO de los bounds,
+      // convertimos la selección en un image placement — el usuario puede
+      // MOVERLA arrastrando el cuerpo y ESCALARLA arrastrando las puntas.
+      // Si el click cae FUERA, arranca un nuevo drag de selección.
       if (tool === "selection" || tool === "transform") {
         const pt = getCanvasPoint(e.clientX, e.clientY);
         if (!pt) return;
+
+        // ¿Hay una selección activa? ¿El click está dentro?
+        const sel = selectionBoundsRef.current;
+        const selImg = selectionImageRef.current;
+        if (sel && selImg && pt.x >= sel.x && pt.x < sel.x + sel.width &&
+            pt.y >= sel.y && pt.y < sel.y + sel.height) {
+          // El click está DENTRO de la selección → convertir en image placement
+          // (con handles de mover + escalar).
+          const canvas = drawingCanvasRef.current;
+          if (canvas) {
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              // Limpiar el área original del canvas (los píxeles se "levantan")
+              ctx.clearRect(sel.x, sel.y, sel.width, sel.height);
+              await commitDrawing();
+            }
+          }
+          // Convertir la selección (ImageData) a dataUrl para el image placement
+          const tmpCanvas = document.createElement("canvas");
+          tmpCanvas.width = selImg.width;
+          tmpCanvas.height = selImg.height;
+          tmpCanvas.getContext("2d")!.putImageData(selImg, 0, 0);
+          const dataUrl = tmpCanvas.toDataURL("image/png");
+          // Iniciar image placement en la posición original de la selección
+          useStore.getState().startImagePlacement(dataUrl, selImg.width, selImg.height);
+          // Corregir la posición (startImagePlacement centra por defecto,
+          // nosotros queremos que empiece donde estaba la selección)
+          useStore.getState().updateImagePlacement({ x: sel.x, y: sel.y });
+          // Limpiar la selección (ahora es un image placement flotante)
+          selectionBoundsRef.current = null;
+          selectionImageRef.current = null;
+          // Limpiar el overlay (marching ants)
+          const overlay = overlayCanvasRef.current;
+          if (overlay) {
+            overlay.getContext("2d")?.clearRect(0, 0, overlay.width, overlay.height);
+          }
+          return;
+        }
+
+        // El click está FUERA de la selección → arrancar nuevo drag de selección
         smootherRef.current = createSmoother(activeBrushRef.current.smoothing);
         startPosRef.current = pt;
         lastPosRef.current = pt;
