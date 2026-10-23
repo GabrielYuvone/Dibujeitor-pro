@@ -173,7 +173,7 @@ async function renderFrameToBlob(
           const maskDrawing = project.drawings[maskCell.drawingId];
           const maskImg = getCachedImage(maskCell.drawingId);
           if (maskDrawing && maskImg && maskImg.complete) {
-            targetCtx.globalCompositeOperation = "destination-in";
+            targetCtx.globalCompositeOperation = "destination-out";
             targetCtx.globalAlpha = 1;
             const mt = interpolateLayerTransform(maskLayer, frame);
             if (mt.offsetX !== 0 || mt.offsetY !== 0 || mt.scale !== 1 || mt.rotation !== 0) {
@@ -441,7 +441,7 @@ export async function exportWebM(
             const maskDrawing = project.drawings[maskCell.drawingId];
             const maskImg = getCachedImage(maskCell.drawingId);
             if (maskDrawing && maskImg && maskImg.complete) {
-              targetCtx.globalCompositeOperation = "destination-in";
+              targetCtx.globalCompositeOperation = "destination-out";
               targetCtx.globalAlpha = 1;
               targetCtx.drawImage(maskImg, 0, 0, maskDrawing.width, maskDrawing.height);
               targetCtx.globalCompositeOperation = "source-over";

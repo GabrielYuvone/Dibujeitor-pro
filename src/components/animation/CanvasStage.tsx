@@ -288,8 +288,10 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
             const maskDrawing = project.drawings[maskCell.drawingId];
             const maskImg = getCachedImage(maskCell.drawingId);
             if (maskDrawing && maskImg && maskImg.complete) {
-              // destination-in: keeps only where BOTH tempCanvas and mask are opaque
-              targetCtx.globalCompositeOperation = "destination-in";
+              // destination-out: REMUEVE la capa donde la máscara tiene contenido.
+              // Es un "inverted matte" — donde la máscara dibuja, OCULTA.
+              // Donde la máscara es transparente, la capa se ve.
+              targetCtx.globalCompositeOperation = "destination-out";
               targetCtx.globalAlpha = maskLayer.opacity;
               const mt = getEffectiveLayerTransform(
                 maskLayer,
