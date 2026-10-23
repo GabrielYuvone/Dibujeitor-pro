@@ -148,6 +148,11 @@ export function useDrawingEngine({
   const pastedImageRef = useRef<ImageData | null>(null);
   const pastedPosRef = useRef<{ x: number; y: number } | null>(null);
   const pastedOffsetRef = useRef<{ x: number; y: number } | null>(null);
+  // Ref para "copiar/pegar frame" — guarda el drawing copiado para pegar
+  // en otra posición del timeline. Se diferencia del copy/paste de selección
+  // (que copia píxeles de un área): este copia el drawing ENTERO del cell
+  // actual y lo pega como un nuevo cell en el frame donde estés parado.
+  const copiedFrameRef = useRef<{ dataUrl: string; width: number; height: number } | null>(null);
   // Refs para la herramienta "move-layer" — arrastrar mueve la capa actual
   // y graba el offset en un keyframe de transform en el frame actual.
   const isMovingLayerRef = useRef(false);
@@ -1290,7 +1295,9 @@ export function useDrawingEngine({
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
         return;
       }
-      // Ctrl+C = copiar SOLO la figura (píxeles no transparentes del área)
+      // Ctrl+C = copiar. Si hay selección → copia los píxeles del área.
+      // Si NO hay selección → copia el drawing ENTERO del frame actual
+      // (para pegarlo en otra posición del timeline).
       if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
         if (selectionBoundsRef.current) {
           e.preventDefault();
@@ -1301,16 +1308,35 @@ export function useDrawingEngine({
             if (ctx) {
               try {
                 const imgData = ctx.getImageData(bounds.x, bounds.y, bounds.width, bounds.height);
-                // Hacer transparentes los píxeles del fondo (alpha = 0)
-                // para que solo se copie la figura
                 for (let i = 3; i < imgData.data.length; i += 4) {
-                  // Si el alpha es muy bajo, considerarlo transparente
                   if (imgData.data[i] < 10) {
                     imgData.data[i] = 0;
                   }
                 }
                 selectionImageRef.current = imgData;
               } catch (_) {}
+            }
+          }
+        } else {
+          // No hay selección → copiar el drawing del frame actual
+          e.preventDefault();
+          const proj = activeProjectRef.current;
+          if (proj) {
+            const layer = proj.layers.find((l) => l.id === proj.currentLayerId);
+            if (layer) {
+              const cell = layer.cells.find(
+                (c) => proj.currentFrame >= c.startFrame && proj.currentFrame < c.startFrame + c.duration
+              );
+              if (cell?.drawingId) {
+                const drawing = proj.drawings[cell.drawingId];
+                if (drawing) {
+                  copiedFrameRef.current = {
+                    dataUrl: drawing.dataUrl,
+                    width: drawing.width,
+                    height: drawing.height,
+                  };
+                }
+              }
             }
           }
         }
@@ -1379,6 +1405,74 @@ export function useDrawingEngine({
               octx.textAlign = "left";
               octx.textBaseline = "top";
               octx.fillText("Arrastrá para mover · Enter para confirmar · Esc cancelar", pastedPosRef.current.x, pastedPosRef.current.y - 14);
+            }
+          }
+          return;
+        }
+        // No hay selección para pegar → si hay un frame copiado, pegarlo
+        // como un nuevo cell en el frame actual.
+        if (copiedFrameRef.current) {
+          e.preventDefault();
+          const proj = activeProjectRef.current;
+          if (proj && proj.currentLayerId) {
+            const layer = proj.layers.find((l) => l.id === proj.currentLayerId);
+            if (layer) {
+              // Crear un NUEVO drawing (copia independiente del original)
+              const newDrawingId = genId("draw");
+              const now = Date.now();
+              const newDrawing = {
+                id: newDrawingId,
+                name: `Pasted ${now}`,
+                dataUrl: copiedFrameRef.current.dataUrl,
+                width: copiedFrameRef.current.width,
+                height: copiedFrameRef.current.height,
+                createdAt: now,
+                updatedAt: now,
+              };
+              // Pre-cachear la imagen
+              try {
+                await preloadImage(newDrawingId, newDrawing.dataUrl);
+              } catch (_) {}
+              // Push snapshot para undo
+              useStore.getState().pushProjectSnapshot();
+              // Agregar el drawing y crear/actualizar cell en el frame actual
+              const frame = proj.currentFrame;
+              useStore.setState((s) => {
+                if (!s.project) return {};
+                const p = s.project;
+                const existingCell = layer.cells.find(
+                  (c) => frame >= c.startFrame && frame < c.startFrame + c.duration
+                );
+                let cells;
+                if (existingCell) {
+                  // Hay un cell en este frame → reemplazar su drawingId
+                  cells = layer.cells.map((c) =>
+                    c.id === existingCell.id ? { ...c, drawingId: newDrawingId } : c
+                  );
+                } else {
+                  // No hay cell → crear uno nuevo
+                  cells = [...layer.cells, {
+                    id: genId("cell"),
+                    drawingId: newDrawingId,
+                    startFrame: frame,
+                    duration: 1,
+                  }];
+                  cells.sort((a, b) => a.startFrame - b.startFrame);
+                }
+                return {
+                  project: {
+                    ...p,
+                    layers: p.layers.map((l) =>
+                      l.id === layer.id ? { ...l, cells } : l
+                    ),
+                    drawings: { ...p.drawings, [newDrawingId]: newDrawing },
+                    dirty: true,
+                    updatedAt: now,
+                  },
+                };
+              });
+              // Recargar el canvas con el nuevo drawing
+              await loadDrawingIntoCanvas(newDrawingId);
             }
           }
           return;
