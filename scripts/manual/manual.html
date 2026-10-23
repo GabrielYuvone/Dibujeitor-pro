@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Dibujeitor Pro — Manual de Usuario</title>
+<style>
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  font-family: 'Inter', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 11pt;
+  line-height: 1.6;
+}
+.page {
+  width: 210mm;
+  min-height: 297mm;
+  padding: 25mm 20mm;
+  page-break-after: always;
+  position: relative;
+}
+.page:last-child { page-break-after: auto; }
+
+/* Cover */
+.cover {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0c4a6e 100%);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 0;
+}
+.cover h1 {
+  font-size: 42pt;
+  font-weight: 800;
+  color: #38bdf8;
+  letter-spacing: 2px;
+  margin-bottom: 8mm;
+}
+.cover h2 {
+  font-size: 18pt;
+  color: #94a3b8;
+  font-weight: 400;
+  margin-bottom: 20mm;
+}
+.cover .logo-area {
+  width: 80mm;
+  height: 30mm;
+  margin-bottom: 15mm;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cover .logo-area div {
+  font-size: 36pt;
+  font-weight: 900;
+  color: #38bdf8;
+  background: #1e293b;
+  padding: 10mm 20mm;
+  border-radius: 8mm;
+  border: 2px solid #38bdf8;
+}
+.cover .footer {
+  position: absolute;
+  bottom: 20mm;
+  font-size: 10pt;
+  color: #64748b;
+}
+
+/* Headings */
+h2.section-title {
+  font-size: 20pt;
+  font-weight: 700;
+  color: #38bdf8;
+  margin-bottom: 6mm;
+  padding-bottom: 3mm;
+  border-bottom: 2px solid #1e293b;
+}
+h3 {
+  font-size: 13pt;
+  font-weight: 600;
+  color: #f1f5f9;
+  margin-top: 5mm;
+  margin-bottom: 3mm;
+}
+h4 {
+  font-size: 11pt;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-top: 4mm;
+  margin-bottom: 2mm;
+}
+
+/* Body text */
+p { margin-bottom: 3mm; }
+.muted { color: #94a3b8; }
+
+/* Shortcut badges */
+kbd, .key {
+  display: inline-block;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 9pt;
+  font-weight: 600;
+  background: #1e293b;
+  color: #38bdf8;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin: 0 2px;
+  min-width: 18px;
+  text-align: center;
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 4mm 0;
+  font-size: 10pt;
+}
+th {
+  background: #1e293b;
+  color: #38bdf8;
+  font-weight: 600;
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 2px solid #334155;
+}
+td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #1e293b;
+  color: #cbd5e1;
+}
+tr:nth-child(even) td { background: #0f172a; }
+tr:nth-child(odd) td { background: #131c2e; }
+
+/* Callout boxes */
+.callout {
+  background: #0c4a6e;
+  border-left: 4px solid #38bdf8;
+  padding: 4mm 6mm;
+  margin: 4mm 0;
+  border-radius: 0 6px 6px 0;
+  font-size: 10pt;
+}
+.callout strong { color: #7dd3fc; }
+
+.tip {
+  background: #14532d;
+  border-left: 4px solid #22c55e;
+  padding: 4mm 6mm;
+  margin: 4mm 0;
+  border-radius: 0 6px 6px 0;
+  font-size: 10pt;
+}
+.tip strong { color: #4ade80; }
+
+/* Page number */
+.page-num {
+  position: absolute;
+  bottom: 10mm;
+  right: 20mm;
+  font-size: 9pt;
+  color: #475569;
+}
+</style>
+</head>
+<body>
+
+<!-- ===== COVER ===== -->
+<div class="page cover">
+  <div class="logo-area"><div>DP</div></div>
+  <h1>DIBUJEITOR PRO</h1>
+  <h2>Manual de Usuario y Atajos de Teclado</h2>
+  <p class="muted" style="font-size:12pt;">Escuela Para Animadores de Rosario</p>
+  <div class="footer">Software de animación cuadro a cuadro — 2025</div>
+</div>
+
+<!-- ===== HERRAMIENTAS DE DIBUJO ===== -->
+<div class="page">
+  <h2 class="section-title">Herramientas de Dibujo</h2>
+
+  <h3>Lápiz <kbd>P</kbd></h3>
+  <p>Herramienta de trazo duro y nítido. Ideal para bocetos y líneas definidas. Cada trazo es una línea sólida con <code>lineCap</code> configurable (redondo o chato). Respeta presión de tableta si está activada.</p>
+
+  <h3>Pincel <kbd>B</kbd></h3>
+  <p>Trazo suave con bordes redondeados. Configurable en tamaño, opacidad y dureza. La dureza controla la suavidad del borde del trazo. Es la herramienta general para pintar áreas de color.</p>
+
+  <h3>Pluma Tinta <kbd>K</kbd></h3>
+  <p>Simula una brocha con cerdas. Cada cerda tiene opacidad variable (efecto de carga desigual) y los bordes son irregulares y deshilachados. Acumulación gradual con <code>multiply</code> para mezcla de color.</p>
+
+  <h3>Acuarela <kbd>W</kbd></h3>
+  <p>Emulación de acuarela real con manchas suaves tipo nube. Cada stamp es una mancha radial con gradiente suave, wet edge (pigmento concentrado en el borde) y granulación (motitas de textura de papel). Usa <code>multiply</code> para que el color se acumule al pisar el trazo. Alpha bajo (0.22) para acumulación gradual.</p>
+
+  <h3>Goma <kbd>E</kbd></h3>
+  <p>Borra píxeles del canvas. Usa <code>destination-out</code> para eliminar contenido. Modo "sólido" (borrado completo) o "suave" (borrado parcial con alpha reducido).</p>
+  <div class="callout"><strong>Doble-click en la goma</strong> (en el Toolbar): borra TODO el contenido del canvas de la capa activa en el frame actual. Pide confirmación. Deshacerable con <kbd>Ctrl</kbd>+<kbd>Z</kbd>.</div>
+
+  <table>
+    <tr><th>Herramienta</th><th>Atajo</th><th>Descripción</th></tr>
+    <tr><td>Lápiz</td><td><kbd>P</kbd></td><td>Trazo duro y nítido</td></tr>
+    <tr><td>Pincel</td><td><kbd>B</kbd></td><td>Trazo suave, configurable</td></tr>
+    <tr><td>Pluma tinta</td><td><kbd>K</kbd></td><td>Cerdas irregulares, multiply</td></tr>
+    <tr><td>Acuarela</td><td><kbd>W</kbd></td><td>Manchas tipo nube, wet edge</td></tr>
+    <tr><td>Goma</td><td><kbd>E</kbd></td><td>Borra píxeles (destination-out)</td></tr>
+  </table>
+  <div class="page-num">2</div>
+</div>
+
+<!-- ===== FORMA Y SELECCIÓN ===== -->
+<div class="page">
+  <h2 class="section-title">Formas, Relleno y Selección</h2>
+
+  <h3>Línea <kbd>L</kbd></h3>
+  <p>Dibuja una línea recta desde el punto inicial hasta el punto donde soltás el mouse. Respuesta tamaño y opacidad del pincel.</p>
+
+  <h3>Rectángulo <kbd>R</kbd></h3>
+  <p>Dibuja un rectángulo desde la esquina superior izquierda hasta donde soltás. Borde con tamaño y color del pincel activo.</p>
+
+  <h3>Elipse <kbd>O</kbd></h3>
+  <p>Dibuja una elipse inscrita en el rectángulo de arrastre. Borde con tamaño y color del pincel activo.</p>
+
+  <h3>Relleno (Bote de tinta) <kbd>G</kbd></h3>
+  <p>Flood fill con tolerancia ajustable (1-100). Usa doble compuerta: RGB euclidiano + alpha lineal para que el flood no cruce líneas opacas ni se cuele por bordes anti-aliased.</p>
+  <div class="tip"><strong>Tolerancia 32</strong> (default): cubre anti-aliasing suave. <strong>Tolerancia 1</strong>: muy preciso. <strong>Tolerancia 100</strong>: cruza todo.</div>
+
+  <h3>Selección <kbd>V</kbd></h3>
+  <p>Arrastrás un recuadro para seleccionar un área. Al soltar, el contenido se auto-captura. <strong>Click dentro de la selección</strong> → se convierte en image placement flotante con handles para <strong>mover</strong> (arrastrar cuerpo), <strong>escalar</strong> (puntas) y <strong>rotar</strong> (círculo arriba). <kbd>Enter</kbd> confirma, <kbd>Esc</kbd> cancela.</p>
+
+  <h3>Transformar <kbd>T</kbd></h3>
+  <p>Igual que Selección: si hay imagen pegada flotante (Ctrl+V), la podés mover/escalar/rotar. Si hay selección activa, click dentro → image placement.</p>
+
+  <h3>Cuentagotas <kbd>I</kbd></h3>
+  <p>Click en cualquier punto del canvas para capturar el color de ese píxel. Se aplica al pincel activo y cambia automáticamente a la herramienta Lápiz.</p>
+
+  <table>
+    <tr><th>Herramienta</th><th>Atajo</th><th>Acción</th></tr>
+    <tr><td>Línea</td><td><kbd>L</kbd></td><td>Línea recta</td></tr>
+    <tr><td>Rectángulo</td><td><kbd>R</kbd></td><td>Rectángulo</td></tr>
+    <tr><td>Elipse</td><td><kbd>O</kbd></td><td>Elipse</td></tr>
+    <tr><td>Relleno</td><td><kbd>G</kbd></td><td>Flood fill con tolerancia</td></tr>
+    <tr><td>Selección</td><td><kbd>V</kbd></td><td>Seleccionar + transformar (mover/escalar/rotar)</td></tr>
+    <tr><td>Transformar</td><td><kbd>T</kbd></td><td>Mover/escalar/rotar pegado o selección</td></tr>
+    <tr><td>Cuentagotas</td><td><kbd>I</kbd></td><td>Capturar color del canvas</td></tr>
+  </table>
+  <div class="page-num">3</div>
+</div>
+
+<!-- ===== NAVEGACIÓN Y VISTA ===== -->
+<div class="page">
+  <h2 class="section-title">Navegación y Vista</h2>
+
+  <h3>Mover Lienzo (Pan) <kbd>H</kbd></h3>
+  <p>Arrastrás para desplazar la vista del canvas. También accesible manteniendo <kbd>C</kbd> apretado (modificador temporal).</p>
+
+  <h3>Zoom <kbd>Z</kbd></h3>
+  <p>Modificador temporal: mientras mantenés <kbd>Z</kbd> apretado, arrastrás hacia arriba para acercar y hacia abajo para alejar. También podés usar la <strong>rueda del mouse</strong>: el zoom se centra en el punto donde está el cursor.</p>
+  <div class="tip"><strong>Rueda del mouse</strong>: el punto del canvas bajo el cursor se queda fijo durante el zoom. No salta al centro.</div>
+
+  <h3>Tool Zoom (toggle)</h3>
+  <p>Seleccionás el tool Zoom y hacés click: alterna entre zoom 1x y 2x, anclado en el punto del click.</p>
+
+  <h3>Mover Capa <kbd>M</kbd></h3>
+  <p>Arrastrás para mover la capa activa. NO crea keyframe automáticamente — solo actualiza un draft transform (preview live). Para commitear como keyframe, presioná el botón <strong>◆ Keyframe</strong> en el Timeline.</p>
+  <div class="callout"><strong>Draft vs Keyframe</strong>: el draft es un offset temporal (no se guarda al exportar). El keyframe es permanente (se interpola entre frames y se respeta en el export).</div>
+
+  <h3>Barra Espaciadora</h3>
+  <p>Tiene doble comportamiento:</p>
+  <table>
+    <tr><th>Acción</th><th>Resultado</th></tr>
+    <tr><td><strong>Tap</strong> (presionar y soltar rápido sin arrastrar)</td><td>Toggle Play/Pausa</td></tr>
+    <tr><td><strong>Hold + arrastrar</strong> (mantener apretado y arrastrar)</td><td>Panear el canvas (mover la vista)</td></tr>
+  </table>
+  <p>El sistema detecta si hubo drag durante la presión. Si no hubo drag y la duración fue corta (<500ms), es un tap → play. Si hubo drag, es pan.</p>
+
+  <table>
+    <tr><th>Acción</th><th>Atajo</th><th>Descripción</th></tr>
+    <tr><td>Pan</td><td><kbd>H</kbd> o <kbd>C</kbd>+drag o <kbd>Space</kbd>+drag</td><td>Mover la vista del canvas</td></tr>
+    <tr><td>Zoom</td><td><kbd>Z</kbd>+drag o rueda</td><td>Acercar/alejar (centrado en cursor)</td></tr>
+    <tr><td>Mover capa</td><td><kbd>M</kbd>+drag</td><td>Desplazar capa con draft</td></tr>
+    <tr><td>Play/Pausa</td><td><kbd>Space</kbd> (tap)</td><td>Reproducir o pausar</td></tr>
+    <tr><td>Reset vista</td><td>Botón "Reiniciar"</td><td>Zoom 100%, pan 0,0</td></tr>
+    <tr><td>Pantalla completa</td><td><kbd>F1</kbd></td><td>Canvas a pantalla completa</td></tr>
+  </table>
+  <div class="page-num">4</div>
+</div>
+
+<!-- ===== MODIFICADORES ===== -->
+<div class="page">
+  <h2 class="section-title">Modificadores de Teclado</h2>
+  <p>Los modificadores son teclas que mantenés apretadas mientras usás el mouse. Cambian temporalmente el comportamiento de la herramienta activa.</p>
+
+  <h3>X — Goma Temporal</h3>
+  <p>Mientras mantenés <kbd>X</kbd> apretado, cualquier herramienta de trazo se convierte en goma. Al soltar <kbd>X</kbd>, volvés a la herramienta original. Ideal para corregir rápidamente sin cambiar de tool.</p>
+
+  <h3>C — Pan Temporal</h3>
+  <p>Mientras mantenés <kbd>C</kbd> apretado y arrastrás, paneás el canvas. Al soltar, volvés a dibujar.</p>
+
+  <h3>Z — Zoom Temporal</h3>
+  <p>Mientras mantenés <kbd>Z</kbd> apretado y arrastrás: arriba = acercar, abajo = alejar. La rueda del mouse también funciona durante este modo.</p>
+
+  <h3>Ctrl + Drag — Cambiar Tamaño del Pincel</h3>
+  <p>Mantenés <kbd>Ctrl</kbd> y arrastrás el mouse. El círculo del cursor del pincel <strong>se queda quieto en su lugar</strong> (no se mueve) y solo cambia de tamaño.</p>
+  <table>
+    <tr><th>Dirección del drag</th><th>Efecto</th></tr>
+    <tr><td>Arriba + Derecha</td><td>Agrandar el trazo</td></tr>
+    <tr><td>Abajo + Izquierda</td><td>Achicar el trazo</td></tr>
+  </table>
+  <p>Fórmula: <code>factor = exp((dx - dy) / 200)</code>. El cursor del pincel se mantiene visible (opacity=1) durante el resize para que veas cómo cambia el tamaño en tiempo real.</p>
+
+  <h3>Ctrl+C / Ctrl+V — Copiar y Pegar</h3>
+  <p><strong>Con selección activa</strong>: <kbd>Ctrl</kbd>+<kbd>C</kbd> copia los píxeles del área seleccionada. <kbd>Ctrl</kbd>+<kbd>V</kbd> los pega como imagen flotante (mover/escalar/rotar + Enter para confirmar).</p>
+  <p><strong>Sin selección</strong>: <kbd>Ctrl</kbd>+<kbd>C</kbd> copia el drawing ENTERO del frame actual. <kbd>Ctrl</kbd>+<kbd>V</kbd> lo pega como un nuevo cell en el frame donde estés parado (copia independiente — modificar uno no afecta al otro).</p>
+  <p><strong>Imagen externa del clipboard</strong>: si copiaste una imagen de otro programa y hacés <kbd>Ctrl</kbd>+<kbd>V</kbd>, se carga como image placement con handles de mover/escalar/rotar.</p>
+
+  <h3>Ctrl+Z / Ctrl+Shift+Z — Deshacer / Rehacer</h3>
+  <p>Deshace la última acción. Funciona con dibujos, cambios estructurales (agregar capa, mover cell, keyframes, etc.) y borrado total del canvas.</p>
+
+  <h3>Shift — Snap</h3>
+  <p>Mientras rotás con el handle de rotación: <strong>snap a 15°</strong> (0°, 15°, 30°, 45°, 60°, 90°...). Útil para alinear.</p>
+
+  <h3>Enter / Esc — Confirmar / Cancelar</h3>
+  <p><kbd>Enter</kbd>: confirma el paste flotante o image placement (bakea al canvas). <kbd>Esc</kbd>: cancela (descarta).</p>
+
+  <div class="page-num">5</div>
+</div>
+
+<!-- ===== TIMELINE ===== -->
+<div class="page">
+  <h2 class="section-title">Timeline y Frames</h2>
+
+  <h3>Navegación de Frames</h3>
+  <table>
+    <tr><th>Atajo</th><th>Acción</th></tr>
+    <tr><td><kbd>←</kbd></td><td>Frame anterior</td></tr>
+    <tr><td><kbd>→</kbd></td><td>Frame siguiente</td></tr>
+    <tr><td>Botón ⏮</td><td>Ir al inicio (frame 0)</td></tr>
+    <tr><td>Botón ⏭</td><td>Ir al final</td></tr>
+    <tr><td>Click en el header del timeline</td><td>Ir al frame clickeado</td></tr>
+    <tr><td>Click en un cell</td><td>Seleccionar capa + ir al frame del cell</td></tr>
+  </table>
+
+  <h3>Operaciones de Frames</h3>
+  <table>
+    <tr><th>Atajo / Botón</th><th>Acción</th></tr>
+    <tr><td><kbd>N</kbd> o botón "Nuevo"</td><td>Agregar frame DESPUÉS del último de la capa seleccionada</td></tr>
+    <tr><td><kbd>D</kbd> o botón "Duplicar"</td><td>Duplicar el cell actual (lo inserta después)</td></tr>
+    <tr><td>Botón "Borrar"</td><td>Eliminar el cell del frame actual</td></tr>
+    <tr><td>Botón "Vacío"</td><td>Insertar un frame vacío (sin drawing)</td></tr>
+  </table>
+
+  <h3>Drag de Cells</h3>
+  <p>Arrastrás un cell por su cuerpo para moverlo a otra posición del timeline. Si al soltar queda solapado con otro cell, este se empuja a la derecha (efecto cascada).</p>
+
+  <h3>Resize de Cells</h3>
+  <p>Arrastrás el borde derecho de un cell para cambiar su duración (exposición). Si aumentás la duración, los cells siguientes se empujan a la derecha (no se solapan).</p>
+
+  <h3>Selección Múltiple de Cells</h3>
+  <p><kbd>Shift</kbd>+click: selección por rango. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+click: toggle individual. Click en área vacía: limpia selección. Botón "Borrar" con >1 cell seleccionado: borra todos los seleccionados.</p>
+
+  <h3>Loop al Exportar</h3>
+  <p>En el diálogo de export, el campo "Loop (repeticiones)" te deja repetir la animación X veces en el video exportado. 1 = una vez, 3 = tres loops seguidos.</p>
+
+  <div class="page-num">6</div>
+</div>
+
+<!-- ===== CAPAS ===== -->
+<div class="page">
+  <h2 class="section-title">Capas</h2>
+
+  <h3>Operaciones Básicas</h3>
+  <table>
+    <tr><th>Acción</th><th>Cómo</th></tr>
+    <tr><td>Agregar capa</td><td>Botón "+ Capa" o menú desplegable (Dibujo, Referencia, Fondo, Audio)</td></tr>
+    <tr><td>Borrar capa</td><td>Botón 🗑 en la capa (no se puede si solo hay 1)</td></tr>
+    <tr><td>Duplicar capa</td><td>Botón ⧉ — crea copia independiente (drawings duplicados)</td></tr>
+    <tr><td>Merge capas</td><td>Shift/Ctrl+click para seleccionar varias → botón "Merge"</td></tr>
+    <tr><td>Reordenar</td><td>Drag desde el grip handle (⠿) a la posición deseada</td></tr>
+    <tr><td>Ocultar/Mostrar</td><td>Click en el ojo (👁 / 🚫)</td></tr>
+    <tr><td>Bloquear</td><td>Click en el candado (🔒 / 🔓)</td></tr>
+    <tr><td>Opacidad</td><td>Slider abajo del panel de capas</td></tr>
+    <tr><td>Renombrar</td><td>Click en el nombre y escribir</td></tr>
+  </table>
+
+  <h3>Capa Máscara</h3>
+  <p>Click en el botón cian (▼) para convertir una capa en máscara de la capa directamente debajo. Funciona como <strong>inverted matte</strong> de After Effects: donde la máscara tiene contenido, OCULTA la capa de abajo. Donde es transparente, la capa se ve.</p>
+  <div class="callout">La máscara funciona <strong>incluso si la capa máscara está oculta</strong> (ojo apagado), igual que en After Effects. Se respeta en el editor, playback y export (MP4/WebM/GIF).</div>
+
+  <h3>Keyframes de Transformación</h3>
+  <p>Con el tool "Mover capa" (<kbd>M</kbd>) arrastrás la capa → se actualiza el draft (preview). El botón <strong>◆ Keyframe</strong> en el Timeline commitea el draft como keyframe en el frame actual. Los keyframes se interpolan linealmente entre frames.</p>
+  <table>
+    <tr><th>Acción</th><th>Cómo</th></tr>
+    <tr><td>Mover capa (preview)</td><td><kbd>M</kbd> + drag, o <kbd>Space</kbd> no funciona más para esto (ahora es pan)</td></tr>
+    <tr><td>Commitear keyframe</td><td>Botón ◆ Keyframe en el Timeline</td></tr>
+    <tr><td>Borrar keyframe del frame actual</td><td>Botón ◆ (tenue) al lado del botón Keyframe</td></tr>
+    <tr><td>Limpiar todos los keyframes</td><td>Botón ↺ (RotateCcw)</td></tr>
+    <tr><td>Ir a un keyframe</td><td>Click en el diamante amarillo del timeline</td></tr>
+    <tr><td>Borrar un keyframe</td><td>Shift+click en el diamante amarillo</td></tr>
+  </table>
+
+  <h3>Onion Skin</h3>
+  <p>Muestra los frames anteriores y posteriores como fantasmas semi-transparentes debajo del frame actual. Configurable en opacidad y cantidad de frames.</p>
+
+  <h3>Tipos de Punta</h3>
+  <p><strong>Redonda</strong>: terminación suave (lineCap round). <strong>Chata</strong>: terminación recta (lineCap butt, lineJoin miter). Disponible para Lápiz, Pincel, Pluma tinta, Acuarela y Goma.</p>
+
+  <div class="page-num">7</div>
+</div>
+
+<!-- ===== EXPORTAR Y GUARDAR ===== -->
+<div class="page">
+  <h2 class="section-title">Exportar y Guardar Proyectos</h2>
+
+  <h3>Formatos de Export</h3>
+  <table>
+    <tr><th>Formato</th><th>Descripción</th></tr>
+    <tr><td>MP4</td><td>Video con audio. Usa ffmpeg.wasm (bundleado local, sin internet). Fallback a WebM si falla.</td></tr>
+    <tr><td>WebM</td><td>Video sin ffmpeg (MediaRecorder nativo del browser). Más rápido.</td></tr>
+    <tr><td>GIF</td><td>Animación GIF con paleta cuantizada.</td></tr>
+    <tr><td>PNG Sequence</td><td>Secuencia de imágenes PNG (una por frame).</td></tr>
+    <tr><td>JPEG Sequence</td><td>Secuencia de imágenes JPEG.</td></tr>
+    <tr><td>PNG / JPEG</td><td>Imagen estática del frame actual.</td></tr>
+  </table>
+
+  <h3>Opciones de Export</h3>
+  <ul style="margin-left: 6mm;">
+    <li><strong>Dimensiones</strong>: ancho y alto del video exportado</li>
+    <li><strong>FPS</strong>: frames por segundo de salida (1-120)</li>
+    <li><strong>Rango</strong>: frame inicial y final del export</li>
+    <li><strong>Loop count</strong>: repite la animación X veces (1-100)</li>
+    <li><strong>Audio</strong>: incluir o no la pista de audio</li>
+    <li><strong>Color de fondo</strong>: color del fondo del video exportado</li>
+    <li><strong>Calidad</strong>: para JPEG/GIF (0-1)</li>
+  </ul>
+
+  <h3>Guardar como archivo .dibu</h3>
+  <p>Archivo → "Guardar como archivo…": descarga un archivo <code>.dibu</code> (JSON con todo el proyecto: capas, frames, drawings, audio, etc.). Usa el diálogo nativo del SO (en Chrome/Edge) para elegir ubicación y nombre. En Firefox, descarga automática.</p>
+
+  <h3>Abrir desde archivo .dibu</h3>
+  <p>Archivo → "Abrir desde archivo…": seleccionás un <code>.dibu</code> y se importa al editor. Regenera el ID para no colisionar con proyectos existentes. Lo guarda en IndexedDB y lo abre.</p>
+
+  <div class="callout"><strong>ffmpeg bundleado</strong>: el archivo <code>public/ffmpeg/ffmpeg-core.wasm</code> (31MB) está incluido en el proyecto. No requiere internet ni instalación. Funciona en cualquier PC que pueda abrir la página.</div>
+
+  <div class="page-num">8</div>
+</div>
+
+<!-- ===== TABLA MAESTRA DE ATAJOS ===== -->
+<div class="page">
+  <h2 class="section-title">Tabla Maestra de Atajos</h2>
+
+  <h3>Herramientas</h3>
+  <table>
+    <tr><th>Atajo</th><th>Herramienta</th></tr>
+    <tr><td><kbd>P</kbd></td><td>Lápiz</td></tr>
+    <tr><td><kbd>B</kbd></td><td>Pincel</td></tr>
+    <tr><td><kbd>K</kbd></td><td>Pluma tinta</td></tr>
+    <tr><td><kbd>W</kbd></td><td>Acuarela</td></tr>
+    <tr><td><kbd>E</kbd></td><td>Goma (doble-click = borrar todo)</td></tr>
+    <tr><td><kbd>L</kbd></td><td>Línea</td></tr>
+    <tr><td><kbd>R</kbd></td><td>Rectángulo</td></tr>
+    <tr><td><kbd>O</kbd></td><td>Elipse</td></tr>
+    <tr><td><kbd>G</kbd></td><td>Relleno (bote de tinta)</td></tr>
+    <tr><td><kbd>V</kbd></td><td>Selección</td></tr>
+    <tr><td><kbd>T</kbd></td><td>Transformar</td></tr>
+    <tr><td><kbd>I</kbd></td><td>Cuentagotas</td></tr>
+    <tr><td><kbd>H</kbd></td><td>Mover lienzo (Pan)</td></tr>
+    <tr><td><kbd>Z</kbd></td><td>Zoom (hold + drag o toggle)</td></tr>
+    <tr><td><kbd>M</kbd></td><td>Mover capa</td></tr>
+  </table>
+
+  <h3>Modificadores Temporales</h3>
+  <table>
+    <tr><th>Tecla</th><th>Efecto mientras está apretada</th></tr>
+    <tr><td><kbd>X</kbd></td><td>Cualquier tool → Goma temporal</td></tr>
+    <tr><td><kbd>C</kbd></td><td>Cualquier tool → Pan temporal</td></tr>
+    <tr><td><kbd>Z</kbd></td><td>Cualquier tool → Zoom por arrastre</td></tr>
+    <tr><td><kbd>Ctrl</kbd> + drag</td><td>Resize brush (↑→ agranda, ↓← achica)</td></tr>
+    <tr><td><kbd>Shift</kbd></td><td>Snap a 15° al rotar</td></tr>
+    <tr><td><kbd>Space</kbd> tap</td><td>Play/Pausa</td></tr>
+    <tr><td><kbd>Space</kbd> hold + drag</td><td>Pan del canvas</td></tr>
+  </table>
+
+  <h3>Archivo y Edición</h3>
+  <table>
+    <tr><th>Atajo</th><th>Acción</th></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Guardar (IndexedDB)</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Deshacer</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Rehacer</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>Copiar (selección o frame entero)</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>Pegar (selección, frame, o imagen del clipboard)</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>X</kbd></td><td>Cortar (copiar + borrar)</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></td><td>Pegar en el centro</td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>Confirmar paste/placement</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>Cancelar paste/placement/selección</td></tr>
+    <tr><td><kbd>Delete</kbd> / <kbd>Backspace</kbd></td><td>Limpiar selección</td></tr>
+  </table>
+
+  <h3>Timeline</h3>
+  <table>
+    <tr><th>Atajo</th><th>Acción</th></tr>
+    <tr><td><kbd>←</kbd></td><td>Frame anterior</td></tr>
+    <tr><td><kbd>→</kbd></td><td>Frame siguiente</td></tr>
+    <tr><td><kbd>N</kbd></td><td>Nuevo frame (al final de la capa actual)</td></tr>
+    <tr><td><kbd>D</kbd></td><td>Duplicar frame</td></tr>
+    <tr><td><kbd>Space</kbd></td><td>Play/Pausa</td></tr>
+    <tr><td><kbd>F1</kbd></td><td>Pantalla completa del canvas</td></tr>
+  </table>
+
+  <div class="page-num">9</div>
+</div>
+
+</body>
+</html>
