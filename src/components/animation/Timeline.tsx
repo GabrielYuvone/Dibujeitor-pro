@@ -426,6 +426,7 @@ export function Timeline() {
                 onClick={() => useStore.getState().selectLayer(layer.id)}
               >
                 <span className="truncate flex-1">{layer.name}</span>
+                {layer.isMask && <span className="text-cyan-500 ml-1 font-bold" title="Capa máscara">▼</span>}
                 {!layer.visible && <span className="text-muted-foreground ml-1">○</span>}
                 {layer.locked && <span className="text-muted-foreground ml-1">🔒</span>}
               </div>

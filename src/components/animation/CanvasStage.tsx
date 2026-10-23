@@ -214,7 +214,13 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     // En edit mode (sin playback), la capa activa se muestra en el drawing
     // canvas (arriba) CON su transform aplicado vía CSS. La excluimos del
     // composited para no duplicar.
-    const excludeActiveLayer = viewMode === "edit" && !playback.playing;
+    // En edit mode, la capa activa se incluye en el composited (a su
+    // posición correcta en el z-order). El drawingCanvas solo es visible
+    // cuando se está DIBUJANDO (para ver los trazos nuevos). Antes la
+    // capa activa se excluía del composited y se mostraba SIEMPRE arriba
+    // en el drawingCanvas — confundía porque parecía estar arriba aún
+    // cuando estaba al fondo del z-order.
+    const excludeActiveLayer = false;
     const activeLayerId = project.currentLayerId;
 
     // Onion skin primero (debajo de las capas reales) — solo en edit mode.
@@ -923,9 +929,12 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           style={{
             width: drawingCanvasW,
             height: drawingCanvasH,
-            // Escondemos el drawingCanvas si estamos compositando (playback/
-            // preview) O si la capa activa está oculta (eye toggle).
-            visibility: isCompositing || !activeLayerVisible ? "hidden" : "visible",
+            // El drawingCanvas solo es visible durante compositing (playback)
+            // o cuando se está DIBUJANDO (para ver los trazos nuevos). Cuando
+            // no se dibuja, la capa activa se ve en el composited (a su
+            // posición correcta en el z-order). Antes el drawingCanvas estaba
+            // SIEMPRE visible — hacía que la capa activa pareciera estar arriba.
+            visibility: isCompositing || isDrawing ? "visible" : "hidden",
             // Aplicamos el transform de la capa activa (keyframes + draft)
             // al drawingCanvas vía CSS. Esto mueve visualmente la capa a su
             // posición movida (igual que el composited aplica el transform
