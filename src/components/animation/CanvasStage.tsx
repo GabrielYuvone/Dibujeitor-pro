@@ -67,8 +67,8 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
   const isPointerDownRef = useRef(false);
   // Refs para el manejo de drag/scale de la imagen colocada
   const placementImageRef = useRef<HTMLImageElement | null>(null);
-  const placementModeRef = useRef<"none" | "move" | "scale-tl" | "scale-tr" | "scale-bl" | "scale-br">("none");
-  const placementStartRef = useRef<{ x: number; y: number; px: number; py: number; pw: number; ph: number } | null>(null);
+  const placementModeRef = useRef<"none" | "move" | "scale-tl" | "scale-tr" | "scale-bl" | "scale-br" | "rotate">("none");
+  const placementStartRef = useRef<{ x: number; y: number; px: number; py: number; pw: number; ph: number; prot: number } | null>(null);
 
   const engine = useDrawingEngine({
     drawingCanvasRef,
@@ -314,30 +314,98 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     // Dibujar la imagen colocada (semi-transparente para que se vea
     // que está en modo edición)
     octx.globalAlpha = 0.95;
-    octx.drawImage(img, x, y, w, h);
+    // Aplicar rotación si hay (pivot en el centro de la imagen)
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+    const rot = imagePlacement.rotation ?? 0;
+    if (rot !== 0) {
+      octx.save();
+      octx.translate(cx, cy);
+      octx.rotate((rot * Math.PI) / 180);
+      octx.drawImage(img, -w / 2, -h / 2, w, h);
+      octx.restore();
+    } else {
+      octx.drawImage(img, x, y, w, h);
+    }
     octx.globalAlpha = 1;
 
-    // Bounding box
-    octx.strokeStyle = "#4dabf7";
-    octx.lineWidth = 1.5;
-    octx.setLineDash([6, 4]);
-    octx.strokeRect(x, y, w, h);
-    octx.setLineDash([]);
-
-    // 4 corner handles (cuadrados azules)
-    const handleSize = 10;
-    const handles = [
-      { x: x - handleSize / 2, y: y - handleSize / 2 },          // top-left
-      { x: x + w - handleSize / 2, y: y - handleSize / 2 },       // top-right
-      { x: x - handleSize / 2, y: y + h - handleSize / 2 },       // bottom-left
-      { x: x + w - handleSize / 2, y: y + h - handleSize / 2 },   // bottom-right
-    ];
-    for (const hd of handles) {
+    // Bounding box (rotado si hay rotación)
+    if (rot !== 0) {
+      octx.save();
+      octx.translate(cx, cy);
+      octx.rotate((rot * Math.PI) / 180);
+      octx.strokeStyle = "#4dabf7";
+      octx.lineWidth = 1.5;
+      octx.setLineDash([6, 4]);
+      octx.strokeRect(-w / 2, -h / 2, w, h);
+      octx.setLineDash([]);
+      // Corner handles
+      const handleSize = 10;
+      const handles = [
+        { x: -w / 2 - handleSize / 2, y: -h / 2 - handleSize / 2 },
+        { x: w / 2 - handleSize / 2, y: -h / 2 - handleSize / 2 },
+        { x: -w / 2 - handleSize / 2, y: h / 2 - handleSize / 2 },
+        { x: w / 2 - handleSize / 2, y: h / 2 - handleSize / 2 },
+      ];
+      for (const hd of handles) {
+        octx.fillStyle = "#4dabf7";
+        octx.fillRect(hd.x, hd.y, handleSize, handleSize);
+        octx.strokeStyle = "#fff";
+        octx.lineWidth = 1;
+        octx.strokeRect(hd.x, hd.y, handleSize, handleSize);
+      }
+      // Handle de rotación (arriba del top-center, conectado por una línea)
+      const rotHandleY = -h / 2 - 24;
+      octx.strokeStyle = "#4dabf7";
+      octx.lineWidth = 1.5;
+      octx.beginPath();
+      octx.moveTo(0, -h / 2);
+      octx.lineTo(0, rotHandleY);
+      octx.stroke();
       octx.fillStyle = "#4dabf7";
-      octx.fillRect(hd.x, hd.y, handleSize, handleSize);
+      octx.beginPath();
+      octx.arc(0, rotHandleY, 6, 0, Math.PI * 2);
+      octx.fill();
       octx.strokeStyle = "#fff";
       octx.lineWidth = 1;
-      octx.strokeRect(hd.x, hd.y, handleSize, handleSize);
+      octx.stroke();
+      octx.restore();
+    } else {
+      // Sin rotación — bounding box + handles sin transform
+      octx.strokeStyle = "#4dabf7";
+      octx.lineWidth = 1.5;
+      octx.setLineDash([6, 4]);
+      octx.strokeRect(x, y, w, h);
+      octx.setLineDash([]);
+      const handleSize = 10;
+      const handles = [
+        { x: x - handleSize / 2, y: y - handleSize / 2 },
+        { x: x + w - handleSize / 2, y: y - handleSize / 2 },
+        { x: x - handleSize / 2, y: y + h - handleSize / 2 },
+        { x: x + w - handleSize / 2, y: y + h - handleSize / 2 },
+      ];
+      for (const hd of handles) {
+        octx.fillStyle = "#4dabf7";
+        octx.fillRect(hd.x, hd.y, handleSize, handleSize);
+        octx.strokeStyle = "#fff";
+        octx.lineWidth = 1;
+        octx.strokeRect(hd.x, hd.y, handleSize, handleSize);
+      }
+      // Handle de rotación (arriba del top-center)
+      const rotHandleY = y - 24;
+      octx.strokeStyle = "#4dabf7";
+      octx.lineWidth = 1.5;
+      octx.beginPath();
+      octx.moveTo(x + w / 2, y);
+      octx.lineTo(x + w / 2, rotHandleY);
+      octx.stroke();
+      octx.fillStyle = "#4dabf7";
+      octx.beginPath();
+      octx.arc(x + w / 2, rotHandleY, 6, 0, Math.PI * 2);
+      octx.fill();
+      octx.strokeStyle = "#fff";
+      octx.lineWidth = 1;
+      octx.stroke();
     }
 
     // Texto de ayuda
@@ -345,7 +413,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     octx.font = "11px sans-serif";
     octx.textAlign = "left";
     octx.textBaseline = "top";
-    octx.fillText("Enter para confirmar · Esc para cancelar · arrastrá para mover, puntas para escalar", x, y - 16);
+    octx.fillText("Enter para confirmar · Esc para cancelar · arrastrá para mover, puntas para escalar, círculo para rotar", x, y - 16);
   }, [imagePlacement]);
 
   // Cargar la imagen del placement cuando cambia
@@ -407,8 +475,20 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
                    pt.y >= y + h - handleSize / 2 && pt.y <= y + h + handleSize / 2;
       const inImage = pt.x >= x && pt.x <= x + w && pt.y >= y && pt.y <= y + h;
 
+      // Handle de rotación: está arriba del top-center, a 24px del borde.
+      // Si hay rotación, rotar la posición del handle alrededor del centro.
+      const cx = x + w / 2;
+      const cy = y + h / 2;
+      const rot = (imagePlacement.rotation ?? 0) * Math.PI / 180;
+      const rotHx_local = 0;           // relativo al centro, sin rotar
+      const rotHy_local = -h / 2 - 24; // arriba del top-center
+      const rotHx = cx + rotHx_local * Math.cos(rot) - rotHy_local * Math.sin(rot);
+      const rotHy = cy + rotHx_local * Math.sin(rot) + rotHy_local * Math.cos(rot);
+      const inRotate = Math.sqrt((pt.x - rotHx) ** 2 + (pt.y - rotHy) ** 2) <= 12;
+
       let mode: typeof placementModeRef.current = "none";
-      if (inTL) mode = "scale-tl";
+      if (inRotate) mode = "rotate";
+      else if (inTL) mode = "scale-tl";
       else if (inTR) mode = "scale-tr";
       else if (inBL) mode = "scale-bl";
       else if (inBR) mode = "scale-br";
@@ -424,6 +504,7 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
         py: imagePlacement.y,
         pw: imagePlacement.width,
         ph: imagePlacement.height,
+        prot: imagePlacement.rotation ?? 0,
       };
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
       return true;
@@ -448,6 +529,19 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           x: start.px + dx,
           y: start.py + dy,
         });
+      } else if (placementModeRef.current === "rotate") {
+        // Rotar: el ángulo desde el centro del image hasta el mouse,
+        // relativo a la posición "arriba" (que es -90° en coords estándar).
+        // rotation = atan2(dy, dx) * 180/PI + 90
+        const cx = start.px + start.pw / 2;
+        const cy = start.py + start.ph / 2;
+        const angle = Math.atan2(pt.y - cy, pt.x - cx) * 180 / Math.PI;
+        const newRot = angle + 90;
+        // Snap a 15° si Shift está apretado (para alinear fácil)
+        const snapped = e.shiftKey
+          ? Math.round(newRot / 15) * 15
+          : Math.round(newRot);
+        updateImagePlacement({ rotation: snapped });
       } else {
         // Escalar desde el centro (más simple y predecible).
         // El usuario arrastra un corner; la imagen crece o se achica

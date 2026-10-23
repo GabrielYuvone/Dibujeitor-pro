@@ -314,6 +314,7 @@ interface ImagePlacement {
   height: number;          // alto actual
   nativeW: number;         // ancho original de la imagen (px)
   nativeH: number;         // alto original (px)
+  rotation?: number;       // grados de rotación (0 = sin rotar)
 }
 
 // ---------------------------------------------------------------------------
@@ -2116,8 +2117,17 @@ export const useStore = create<AppState>((set, get) => ({
         }
       }
     }
-    // Dibujar la imagen colocada en su transformación final
-    tmpCtx.drawImage(img, placement.x, placement.y, placement.width, placement.height);
+    // Dibujar la imagen colocada en su transformación final (con rotación)
+    const rot = placement.rotation ?? 0;
+    if (rot !== 0) {
+      tmpCtx.save();
+      tmpCtx.translate(placement.x + placement.width / 2, placement.y + placement.height / 2);
+      tmpCtx.rotate((rot * Math.PI) / 180);
+      tmpCtx.drawImage(img, -placement.width / 2, -placement.height / 2, placement.width, placement.height);
+      tmpCtx.restore();
+    } else {
+      tmpCtx.drawImage(img, placement.x, placement.y, placement.width, placement.height);
+    }
     const finalDataUrl = tmpCanvas.toDataURL("image/png");
 
     // Crear/actualizar el drawing con la imagen pegada
