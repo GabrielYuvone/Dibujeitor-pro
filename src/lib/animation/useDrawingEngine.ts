@@ -140,7 +140,7 @@ export function useDrawingEngine({
   // modo "resize brush" (cambiar tamaño del pincel arrastrando arriba/abajo).
   const ctrlModifierRef = useRef(false);
   const isResizingBrushRef = useRef(false);
-  const brushResizeStartRef = useRef<{ y: number; size: number } | null>(null);
+  const brushResizeStartRef = useRef<{ x: number; y: number; size: number; cursorLeft: number; cursorTop: number } | null>(null);
   // Refs para selección (definidos al inicio del hook)
   const selectionBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const selectionImageRef = useRef<ImageData | null>(null);
@@ -506,9 +506,15 @@ export function useDrawingEngine({
         isResizingBrushRef.current = true;
         isDrawingRef.current = false;
         useStore.setState({ isDrawing: false });
+        // Guardar posición inicial del mouse Y del cursor del pincel
+        // para que el cursor se quede quieto durante el resize.
+        const brushCursor = document.querySelector<HTMLDivElement>("[ref='brushCursor']");
         brushResizeStartRef.current = {
+          x: e.clientX,
           y: e.clientY,
           size: activeBrushRef.current.size,
+          cursorLeft: brushCursor ? parseFloat(brushCursor.style.left) || 0 : 0,
+          cursorTop: brushCursor ? parseFloat(brushCursor.style.top) || 0 : 0,
         };
         return;
       }
@@ -895,12 +901,18 @@ export function useDrawingEngine({
       }
 
       // Resize brush (modificador Ctrl apretado + drag)
-      // dy < 0 → agrandar; dy > 0 → achicar
+      // Dirección diagonal: arriba+derecha = agrandar, abajo+izquierda = achicar.
+      // El cursor del pincel NO se mueve durante el resize (se queda en su
+      // posición original). Solo cambia el tamaño del círculo.
       if (isResizingBrushRef.current && brushResizeStartRef.current) {
+        const dx = e.clientX - brushResizeStartRef.current.x;
         const dy = e.clientY - brushResizeStartRef.current.y;
+        // dx > 0 (derecha) + dy < 0 (arriba) → agrandar
+        // dx < 0 (izquierda) + dy > 0 (abajo) → achicar
+        // Usamos (dx - dy) como "diagonal de crecimiento"
+        const diagonal = dx - dy;
         const startSize = brushResizeStartRef.current.size;
-        // Cada 100px de drag cambia el tamaño por un factor de 2
-        const factor = Math.exp(-dy / 200);
+        const factor = Math.exp(diagonal / 200);
         const newSize = Math.max(0.5, Math.min(200, startSize * factor));
         useStore.getState().setBrush({ size: newSize });
         return;

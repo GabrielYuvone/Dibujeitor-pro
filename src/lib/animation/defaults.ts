@@ -24,6 +24,7 @@ export const DEFAULT_BRUSH: BrushSettings = {
   pressureSensitivity: true,
   minSizePressure: 0.15,
   cap: "round",
+  brushTip: "round",
   join: "round",
   eraserMode: "solid",
   fillTolerance: 32,

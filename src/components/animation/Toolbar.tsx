@@ -288,6 +288,42 @@ export function Toolbar() {
       )}
 
       {/* Goma suave: solo para goma */}
+      {/* Tipo de punta: redondo (suave) o chato (terminación recta).
+          Visible para herramientas de trazo. */}
+      {(currentTool === "pencil" || currentTool === "brush" || currentTool === "ink" ||
+        currentTool === "watercolor" || currentTool === "eraser") && (
+      <div>
+        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+          Punta
+        </div>
+        <div className="flex gap-1">
+          <button
+            className={`flex-1 px-2 py-1 text-[10px] rounded transition-colors ${
+              brush.brushTip === "round"
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted/50 hover:bg-muted text-foreground"
+            }`}
+            onClick={() => setBrush({ brushTip: "round" })}
+            title="Punta redonda (suave)"
+          >
+            Redonda
+          </button>
+          <button
+            className={`flex-1 px-2 py-1 text-[10px] rounded transition-colors ${
+              brush.brushTip === "flat"
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted/50 hover:bg-muted text-foreground"
+            }`}
+            onClick={() => setBrush({ brushTip: "flat" })}
+            title="Punta chata (terminación recta)"
+          >
+            Chata
+          </button>
+        </div>
+      </div>
+      )}
+
+      {/* Goma suave: solo para goma */}
       {currentTool === "eraser" && (
       <div className="flex items-center justify-between text-xs">
         <label htmlFor="eraser-mode">Goma suave</label>

@@ -78,8 +78,15 @@ export function configureStroke(
   ctx.lineWidth = Math.max(0.5, size);
   ctx.strokeStyle = brush.color;
   ctx.fillStyle = brush.color;
-  ctx.lineCap = brush.cap;
-  ctx.lineJoin = brush.join;
+  // brushTip "flat" = lineCap "butt" (terminación recta) + lineJoin "miter"
+  // brushTip "round" = lineCap "round" (suave) + lineJoin "round"
+  if (brush.brushTip === "flat") {
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "miter";
+  } else {
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+  }
   ctx.globalAlpha = brush.opacity;
   ctx.globalCompositeOperation = "source-over";
   ctx.imageSmoothingEnabled = true;

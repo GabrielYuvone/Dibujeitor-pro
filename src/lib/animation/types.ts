@@ -75,6 +75,9 @@ export interface BrushSettings {
   pressureSensitivity: boolean;
   minSizePressure: number;
   cap: StrokeCap;
+  // Tipo de punta del pincel: "round" (redonda, suave) o "flat" (chata,
+  // cuadrada, termina recto). Cambia el lineCap y lineJoin.
+  brushTip: "round" | "flat";
   join: StrokeJoin;
   eraserMode: "solid" | "soft";
   fillTolerance: number;
