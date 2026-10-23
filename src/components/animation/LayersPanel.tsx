@@ -135,19 +135,6 @@ export function LayersPanel() {
         {orderedLayers.map((layer) => (
           <div
             key={layer.id}
-            draggable
-            onDragStart={(e) => {
-              dragHappenedRef.current = true;
-              setDraggingId(layer.id);
-              e.dataTransfer.effectAllowed = "move";
-            }}
-            onDragEnd={() => {
-              setDraggingId(null);
-              setDragOverId(null);
-              // Reset el flag después de un breve delay para que el onClick
-              // que el browser dispare tenga tiempo de verlo.
-              setTimeout(() => { dragHappenedRef.current = false; }, 50);
-            }}
             onDragOver={(e) => {
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
@@ -209,7 +196,19 @@ export function LayersPanel() {
             {/* Grip handle — puntitos para agarrar y arrastrar. Visible
                 siempre (semi-transparente, opaco al hover del grupo). */}
             <span
-              className="cursor-grab active:cursor-grabbing text-muted-foreground/40 group-hover:text-muted-foreground transition-colors flex-shrink-0"
+              draggable
+              onDragStart={(e) => {
+                dragHappenedRef.current = true;
+                setDraggingId(layer.id);
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", layer.id);
+              }}
+              onDragEnd={() => {
+                setDraggingId(null);
+                setDragOverId(null);
+                setTimeout(() => { dragHappenedRef.current = false; }, 50);
+              }}
+              className="cursor-grab active:cursor-grabbing text-muted-foreground/40 group-hover:text-muted-foreground transition-colors flex-shrink-0 select-none"
               title="Arrastrá para reordenar"
             >
               <GripVertical size={14} />
