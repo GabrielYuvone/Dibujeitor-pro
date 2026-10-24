@@ -223,10 +223,13 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
     const excludeActiveLayer = false;
     const activeLayerId = project.currentLayerId;
 
-    // Onion skin primero (debajo de las capas reales) — solo en edit mode.
-    // Respetamos layer.visible — si la capa activa está oculta, no dibujar
-    // su onion skin (el ojo debería funcionar también para el onion).
-    if (onion.enabled && excludeActiveLayer) {
+    // Onion skin primero (debajo de las capas reales) — solo en edit mode
+    // (no durante playback). Antes usaba `excludeActiveLayer` como
+    // condición, pero cuando lo cambié a `false` (para arreglar el
+    // z-order de la capa activa), el onion dejó de dibujar. Ahora
+    // usamos la condición correcta: estamos en edit mode y no en playback.
+    const isEditMode = viewMode === "edit" && !playback.playing;
+    if (onion.enabled && isEditMode) {
       const currentLayer = getCurrentLayer(project);
       if (currentLayer && currentLayer.type !== "audio" && currentLayer.visible) {
         drawOnionIntoCanvas(ctx, project, currentLayer, onion);
