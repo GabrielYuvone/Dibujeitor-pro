@@ -929,12 +929,14 @@ export function CanvasStage({ width, height }: CanvasStageProps) {
           style={{
             width: drawingCanvasW,
             height: drawingCanvasH,
-            // El drawingCanvas solo es visible durante compositing (playback)
-            // o cuando se está DIBUJANDO (para ver los trazos nuevos). Cuando
-            // no se dibuja, la capa activa se ve en el composited (a su
-            // posición correcta en el z-order). Antes el drawingCanvas estaba
-            // SIEMPRE visible — hacía que la capa activa pareciera estar arriba.
-            visibility: isCompositing || isDrawing ? "visible" : "hidden",
+            // El drawingCanvas solo es visible cuando se está DIBUJANDO
+            // (isDrawing) y NO estamos en playback/preview (isCompositing).
+            // Durante playback, el composited muestra todas las capas (incluida
+            // la activa) en su z-order correcto. Si el drawingCanvas quedara
+            // visible durante playback, el frame seleccionado se vería
+            // "sobreimpreso" encima de toda la animación (no se actualiza
+            // entre frames — se queda congelado en el último frame editado).
+            visibility: (!isCompositing && isDrawing) ? "visible" : "hidden",
             // Aplicamos el transform de la capa activa (keyframes + draft)
             // al drawingCanvas vía CSS. Esto mueve visualmente la capa a su
             // posición movida (igual que el composited aplica el transform
