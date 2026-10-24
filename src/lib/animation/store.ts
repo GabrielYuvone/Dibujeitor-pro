@@ -1376,15 +1376,56 @@ export const useStore = create<AppState>((set, get) => ({
       const layers = p.layers.map((l) => {
         if (l.id !== layerId) return l;
         const cells = [...l.cells];
-        // Si existe celda en este frame, asignarle el drawingId
         const cell = cells.find(
           (c) => frame >= c.startFrame && frame < c.startFrame + c.duration
         );
         if (cell) {
           const idx = cells.indexOf(cell);
-          cells[idx] = { ...cell, drawingId };
+          // Si el cell tiene duración 1, simplemente asignar el drawingId.
+          // Si tiene duración > 1, hay que PARTIRLO para que el drawing
+          // solo aplique a ESTE frame, y los demás frames queden vacíos.
+          // Sin esto, el drawing se "congela" y muestra para todos los
+          // frames que cubría el cell original (bug: "frame congelado").
+          if (cell.duration <= 1) {
+            cells[idx] = { ...cell, drawingId };
+          } else {
+            // Partir el cell en hasta 3 partes:
+            // A) frames antes del frame actual (vacío)
+            // B) el frame actual (con el nuevo drawing)
+            // C) frames después del frame actual (vacío)
+            const beforeDur = frame - cell.startFrame;
+            const afterStart = frame + 1;
+            const afterDur = cell.startFrame + cell.duration - afterStart;
+            const newCells: typeof cells = [];
+            if (beforeDur > 0) {
+              newCells.push({
+                ...cell,
+                id: genId("cell"),
+                drawingId: cell.drawingId, // preservar el drawingId original (puede ser null)
+                duration: beforeDur,
+              });
+            }
+            newCells.push({
+              ...cell,
+              id: genId("cell"),
+              drawingId,
+              startFrame: frame,
+              duration: 1,
+            });
+            if (afterDur > 0) {
+              newCells.push({
+                ...cell,
+                id: genId("cell"),
+                drawingId: cell.drawingId,
+                startFrame: afterStart,
+                duration: afterDur,
+              });
+            }
+            // Reemplazar el cell original con las partes
+            cells.splice(idx, 1, ...newCells);
+            cells.sort((a, b) => a.startFrame - b.startFrame);
+          }
         } else {
-          // Crear nueva celda
           cells.push({ id: genId("cell"), drawingId, startFrame: frame, duration: 1 });
           cells.sort((a, b) => a.startFrame - b.startFrame);
         }
