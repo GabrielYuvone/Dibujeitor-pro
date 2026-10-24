@@ -160,6 +160,19 @@ interface AppState {
   mergeLayers: (layerIds: ID[]) => Promise<void>;
   duplicateLayer: (id: ID) => void;
   setLayerLoop: (id: ID, range: { start: number; end: number; count: number } | null) => void;
+  // Rotoscopio: extraer frames de un video y crear una capa de referencia
+  importVideoForRotoscope: (
+    videoFile: File,
+    options: {
+      videoFps: number;
+      animFps: number;
+      startFrame: number;
+      endFrame: number;
+      quality: number;
+      maxWidth: number;
+    },
+    onProgress?: (current: number, total: number) => void
+  ) => Promise<string>;
 
   // Transform keyframes (animación de offset/scale/rotation por capa)
   setLayerTransformAtFrame: (
@@ -915,6 +928,126 @@ export const useStore = create<AppState>((set, get) => ({
       ...p,
       layers: p.layers.map((l) => (l.id === id ? { ...l, loopRange: range } : l)),
     })));
+  },
+
+  importVideoForRotoscope: async (videoFile, options, onProgress) => {
+    const state = get();
+    if (!state.project) return "";
+    const proj = state.project;
+
+    // 1. Cargar el video en un elemento <video> temporal
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    const url = URL.createObjectURL(videoFile);
+    video.src = url;
+
+    // Esperar a que el metadata cargue (duración, dimensiones)
+    await new Promise<void>((resolve, reject) => {
+      video.onloadedmetadata = () => resolve();
+      video.onerror = () => reject(new Error("No se pudo cargar el video"));
+    });
+
+    const videoW = video.videoWidth;
+    const videoH = video.videoHeight;
+    // Redimensionar si es muy grande
+    const scale = Math.min(1, options.maxWidth / videoW);
+    const outW = Math.round(videoW * scale);
+    const outH = Math.round(videoH * scale);
+
+    // 2. Canvas para capturar frames
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext("2d")!;
+
+    // 3. Calcular cuántos frames de animación vamos a extraer
+    const totalAnimFrames = options.endFrame - options.startFrame + 1;
+
+    // 4. Extraer cada frame
+    const newDrawings: Record<string, Drawing> = {};
+    const cells: Cell[] = [];
+    const startFrame = 0; // Los cells empiezan en el frame 0 del proyecto
+
+    for (let i = 0; i < totalAnimFrames; i++) {
+      const animFrame = options.startFrame + i;
+      // Timestamp en el video: frame / fps del video
+      const timestamp = animFrame / options.videoFps;
+
+      // Seek al timestamp
+      video.currentTime = Math.min(timestamp, video.duration - 0.01);
+      await new Promise<void>((resolve) => {
+        const handler = () => { video.onseeked = null; resolve(); };
+        video.onseeked = handler;
+        // Timeout de seguridad por si onseeked no dispara
+        setTimeout(resolve, 500);
+      });
+
+      // Capturar el frame
+      ctx.drawImage(video, 0, 0, videoW, videoH, 0, 0, outW, outH);
+      const dataUrl = canvas.toDataURL("image/jpeg", options.quality);
+
+      // Crear el drawing
+      const drawingId = genId("draw");
+      const now = Date.now();
+      newDrawings[drawingId] = {
+        id: drawingId,
+        name: `Roto ${i}`,
+        dataUrl,
+        width: outW,
+        height: outH,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      // Pre-cachear
+      try {
+        const { preloadImage } = await import("./useDrawingEngine");
+        await preloadImage(drawingId, dataUrl);
+      } catch (_) {}
+
+      // Crear cell
+      cells.push({
+        id: genId("cell"),
+        drawingId,
+        startFrame: startFrame + i,
+        duration: 1,
+      });
+
+      onProgress?.(i + 1, totalAnimFrames);
+      // Ceder al hilo
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    // 5. Descartar el video
+    URL.revokeObjectURL(url);
+    video.src = "";
+
+    // 6. Crear la capa de referencia
+    const layerId = genId("layer");
+    const newLayer: Layer = {
+      id: layerId,
+      name: `Rotoscopio: ${videoFile.name}`,
+      type: "reference",
+      cells,
+      visible: true,
+      locked: false,
+      opacity: 0.5, // Semi-transparente para calcar
+      createdAt: Date.now(),
+    };
+
+    // 7. Push snapshot + actualizar proyecto
+    get().pushProjectSnapshot();
+    set(updateProject(get(), (p) => ({
+      ...p,
+      layers: [newLayer, ...p.layers], // La referencia va al fondo
+      drawings: { ...p.drawings, ...newDrawings },
+      currentLayerId: p.currentLayerId, // No cambiar la capa activa
+      dirty: true,
+      updatedAt: Date.now(),
+    })));
+
+    return layerId;
   },
 
   // -------------------------------------------------------------------------

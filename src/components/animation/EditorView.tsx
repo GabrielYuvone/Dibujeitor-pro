@@ -27,6 +27,7 @@ import {
   Folder,
   FolderOpen,
   Upload,
+  Film,
   HelpCircle,
   Maximize2,
   ChevronLeft,
@@ -75,6 +76,13 @@ export function EditorView() {
   // Ref al input file hidden para "Abrir desde archivo…". Triggered
   // desde el menubar (porque los MenubarItem no pueden contener inputs).
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Rotoscopio: input para video + estado del diálogo
+  const rotoVideoInputRef = useRef<HTMLInputElement | null>(null);
+  const [rotoOpen, setRotoOpen] = useState(false);
+  const [rotoFile, setRotoFile] = useState<File | null>(null);
+  const [rotoProgress, setRotoProgress] = useState(0);
+  const [rotoExtracting, setRotoExtracting] = useState(false);
+  const [rotoError, setRotoError] = useState("");
   const rightPanelVisible = useStore((s) => s.rightPanelVisible);
   const setRightPanelVisible = useStore((s) => s.setRightPanelVisible);
 
@@ -251,6 +259,12 @@ export function EditorView() {
             <MenubarSeparator />
             <MenubarItem onClick={() => setExportOpen(true)}>
               <Download className="mr-2" size={14} /> Exportar video/imagen…
+            </MenubarItem>
+            <MenubarSeparator />
+            {/* Rotoscopio: importar un video y extraer frames como capa
+                de referencia para calcar movimientos. */}
+            <MenubarItem onClick={() => rotoVideoInputRef.current?.click()}>
+              <Film className="mr-2" size={14} /> Rotoscopiar desde video…
             </MenubarItem>
           </MenubarContent>
         </MenubarMenu>
@@ -432,8 +446,7 @@ export function EditorView() {
       {/* Modals */}
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
-      {/* Input file hidden para "Abrir desde archivo…". El menubar dispara
-          el click via fileInputRef. El accept=.json filtra archivos no válidos. */}
+      {/* Input file hidden para "Abrir desde archivo…". */}
       <input
         ref={fileInputRef}
         type="file"
@@ -444,10 +457,163 @@ export function EditorView() {
           if (file) {
             await useStore.getState().openProjectFromFile(file);
           }
-          // Reset para poder abrir el mismo archivo dos veces seguidas
           e.target.value = "";
         }}
       />
+      {/* Input para video de rotoscopio */}
+      <input
+        ref={rotoVideoInputRef}
+        type="file"
+        accept="video/*"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            setRotoFile(file);
+            setRotoOpen(true);
+          }
+          e.target.value = "";
+        }}
+      />
+      {/* Diálogo de rotoscopio */}
+      {rotoOpen && rotoFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-card border border-border rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-sm font-bold mb-1 flex items-center gap-2">
+              <Film size={16} /> Rotoscopiar: {rotoFile.name}
+            </h3>
+            <p className="text-xs text-muted-foreground mb-4">
+              Extrae frames del video como capa de referencia (semi-transparente) para calcar movimientos.
+            </p>
+            {rotoExtracting ? (
+              <div>
+                <div className="text-xs mb-2 text-muted-foreground">
+                  Extrayendo frames… {rotoProgress}%
+                </div>
+                <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary transition-all"
+                    style={{ width: `${rotoProgress}%` }}
+                  />
+                </div>
+              </div>
+            ) : rotoError ? (
+              <div className="text-xs text-destructive mb-4">{rotoError}</div>
+            ) : (
+              <>
+                <label className="text-xs text-muted-foreground block mb-1">
+                  FPS del video (24, 25, 30)
+                </label>
+                <input
+                  type="number"
+                  defaultValue={24}
+                  min={1}
+                  max={120}
+                  id="roto-video-fps"
+                  className="w-full px-2 py-1 bg-background border border-border rounded text-xs mb-3"
+                />
+                <label className="text-xs text-muted-foreground block mb-1">
+                  FPS de animación (6, 8, 12)
+                </label>
+                <input
+                  type="number"
+                  defaultValue={12}
+                  min={1}
+                  max={60}
+                  id="roto-anim-fps"
+                  className="w-full px-2 py-1 bg-background border border-border rounded text-xs mb-3"
+                />
+                <label className="text-xs text-muted-foreground block mb-1">
+                  Frame inicial del video
+                </label>
+                <input
+                  type="number"
+                  defaultValue={0}
+                  min={0}
+                  id="roto-start-frame"
+                  className="w-full px-2 py-1 bg-background border border-border rounded text-xs mb-3"
+                />
+                <label className="text-xs text-muted-foreground block mb-1">
+                  Frame final del video
+                </label>
+                <input
+                  type="number"
+                  defaultValue={71}
+                  min={0}
+                  id="roto-end-frame"
+                  className="w-full px-2 py-1 bg-background border border-border rounded text-xs mb-3"
+                />
+                <label className="text-xs text-muted-foreground block mb-1">
+                  Calidad JPG (0.3-0.7 = liviano)
+                </label>
+                <input
+                  type="range"
+                  min={0.1}
+                  max={0.9}
+                  step={0.05}
+                  defaultValue={0.5}
+                  id="roto-quality"
+                  className="w-full mb-3"
+                />
+                <label className="text-xs text-muted-foreground block mb-1">
+                  Ancho máximo (px) — redimensiona si el video es grande
+                </label>
+                <input
+                  type="number"
+                  defaultValue={1280}
+                  min={320}
+                  id="roto-max-width"
+                  className="w-full px-2 py-1 bg-background border border-border rounded text-xs mb-4"
+                />
+              </>
+            )}
+            <div className="flex gap-2 justify-end">
+              {!rotoExtracting && (
+                <button
+                  className="px-3 py-1.5 text-xs bg-muted hover:bg-muted-foreground/20 rounded"
+                  onClick={() => { setRotoOpen(false); setRotoFile(null); setRotoError(""); }}
+                >
+                  Cancelar
+                </button>
+              )}
+              {!rotoExtracting && !rotoError && (
+                <button
+                  className="px-3 py-1.5 text-xs bg-primary text-primary-foreground hover:brightness-110 rounded"
+                  onClick={async () => {
+                    setRotoExtracting(true);
+                    setRotoError("");
+                    try {
+                      const get = (id: string) => Number((document.getElementById(id) as HTMLInputElement).value);
+                      await useStore.getState().importVideoForRotoscope(
+                        rotoFile,
+                        {
+                          videoFps: get("roto-video-fps"),
+                          animFps: get("roto-anim-fps"),
+                          startFrame: get("roto-start-frame"),
+                          endFrame: get("roto-end-frame"),
+                          quality: get("roto-quality"),
+                          maxWidth: get("roto-max-width"),
+                        },
+                        (current, total) => {
+                          setRotoProgress(Math.round((current / total) * 100));
+                        }
+                      );
+                      setRotoOpen(false);
+                      setRotoFile(null);
+                    } catch (e) {
+                      setRotoError(`Error: ${(e as Error).message}`);
+                    } finally {
+                      setRotoExtracting(false);
+                    }
+                  }}
+                >
+                  Extraer frames
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
