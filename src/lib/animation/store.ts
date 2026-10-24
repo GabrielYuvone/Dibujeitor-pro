@@ -689,11 +689,19 @@ export const useStore = create<AppState>((set, get) => ({
     if (!state.project) return;
     if (state.project.layers.length <= 1) return;
     get().pushProjectSnapshot();
-    set(updateProject(state, (p) => ({
-      ...p,
-      layers: p.layers.filter((l) => l.id !== id),
-      currentLayerId: p.currentLayerId === id ? p.layers[0].id : p.currentLayerId,
-    })));
+    set(updateProject(state, (p) => {
+      // Filtrar PRIMERO y luego usar el primer elemento REMAINING para
+      // currentLayerId. Antes usaba p.layers[0] que podía ser la capa
+      // que se estaba borrando → currentLayerId apuntaba a una capa
+      // inexistente → el engine se quedaba sin capa activa →
+      // "frame congelado" durante el playback.
+      const remaining = p.layers.filter((l) => l.id !== id);
+      return {
+        ...p,
+        layers: remaining,
+        currentLayerId: p.currentLayerId === id ? remaining[0].id : p.currentLayerId,
+      };
+    }));
   },
 
   selectLayer: (id) =>
