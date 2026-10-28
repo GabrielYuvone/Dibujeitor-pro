@@ -123,8 +123,14 @@ export function useDrawingEngine({
   // Modificador X: mientras se mantiene X apretado, el trazo se convierte en
   // goma (eraser) temporalmente. Es un acceso rápido para corregir.
   const xModifierRef = useRef(false);
-  // Modificador C: mientras se mantiene C apretado, entra en modo pan.
+  // Modificador C: mientras se mantiene C apretado + drag, entra en modo
+  // ROTAR canvas. El centro de rotación es el centro del viewer (área
+  // visible), no el centro del canvas. Esto significa que si estás
+  // zoomeado en un costado, el giro siempre es desde el centro de lo
+  // que ves en pantalla.
   const cModifierRef = useRef(false);
+  const isRotatingRef = useRef(false);
+  const rotateStartRef = useRef<{ startAngle: number; startRotation: number; startPanX: number; startPanY: number; viewerCx: number; viewerCy: number } | null>(null);
   // Modificador Espacio: doble propósito.
   //  - TAP (apretar y soltar rápido sin arrastrar): toggle play/pausa.
   //  - HOLD + arrastrar: mueve la capa actual (igual que el tool "move-layer"
@@ -219,6 +225,10 @@ export function useDrawingEngine({
         if (isPanningRef.current) {
           isPanningRef.current = false;
           panStartRef.current = null;
+        }
+        if (isRotatingRef.current) {
+          isRotatingRef.current = false;
+          rotateStartRef.current = null;
         }
       } else if (k === "control") {
         ctrlModifierRef.current = false;
@@ -486,17 +496,29 @@ export function useDrawingEngine({
         return;
       }
 
-      // --- MODIFICADOR C: si C está apretado, entrar en modo pan ---
+      // --- MODIFICADOR C: si C está apretado, entrar en modo ROTAR ---
+      // El centro de rotación es el centro del viewer (área visible).
+      // El usuario arrastra como un "turntable": el ángulo desde el centro
+      // del viewer hasta el mouse determina la rotación.
       if (cModifierRef.current) {
-        isPanningRef.current = true;
-        isDrawingRef.current = false;
-        useStore.setState({ isDrawing: false });
-        panStartRef.current = {
-          x: e.clientX,
-          y: e.clientY,
-          panX: activeCanvasViewRef.current.panX,
-          panY: activeCanvasViewRef.current.panY,
-        };
+        const container = containerRef.current;
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          const viewerCx = rect.left + rect.width / 2;
+          const viewerCy = rect.top + rect.height / 2;
+          const startAngle = Math.atan2(e.clientY - viewerCy, e.clientX - viewerCx);
+          isRotatingRef.current = true;
+          isDrawingRef.current = false;
+          useStore.setState({ isDrawing: false });
+          rotateStartRef.current = {
+            startAngle,
+            startRotation: activeCanvasViewRef.current.rotation,
+            startPanX: activeCanvasViewRef.current.panX,
+            startPanY: activeCanvasViewRef.current.panY,
+            viewerCx,
+            viewerCy,
+          };
+        }
         return;
       }
 
@@ -945,7 +967,39 @@ export function useDrawingEngine({
         return;
       }
 
-      // Pan (tool "pan" o modificador C)
+      // Rotar canvas (modificador C + drag)
+      // El centro de rotación es el centro del viewer. El ángulo del
+      // mouse relativo al centro determina la rotación. Pan se ajusta
+      // para que el centro del viewer quede fijo durante el giro.
+      if (isRotatingRef.current && rotateStartRef.current) {
+        const start = rotateStartRef.current;
+        const currentAngle = Math.atan2(e.clientY - start.viewerCy, e.clientX - start.viewerCx);
+        // Delta en radianes
+        let deltaRad = currentAngle - start.startAngle;
+        // Convertir a grados
+        let deltaDeg = (deltaRad * 180) / Math.PI;
+        // Snap a 15° con Shift
+        let newRotation = start.startRotation + deltaDeg;
+        if (e.shiftKey) {
+          newRotation = Math.round(newRotation / 15) * 15;
+          deltaDeg = newRotation - start.startRotation;
+          deltaRad = (deltaDeg * Math.PI) / 180;
+        }
+        // Ajustar pan para que el centro del viewer quede fijo:
+        // El vector pan rota con la misma delta.
+        const cos = Math.cos(deltaRad);
+        const sin = Math.sin(deltaRad);
+        const newPanX = start.startPanX * cos - start.startPanY * sin;
+        const newPanY = start.startPanX * sin + start.startPanY * cos;
+        setCanvasView({
+          rotation: newRotation,
+          panX: newPanX,
+          panY: newPanY,
+        });
+        return;
+      }
+
+      // Pan (tool "pan")
       if (isPanningRef.current && panStartRef.current) {
         const dx = e.clientX - panStartRef.current.x;
         const dy = e.clientY - panStartRef.current.y;
@@ -1132,6 +1186,12 @@ export function useDrawingEngine({
       if (isPanningRef.current) {
         isPanningRef.current = false;
         panStartRef.current = null;
+        return;
+      }
+      // Rotate fin
+      if (isRotatingRef.current) {
+        isRotatingRef.current = false;
+        rotateStartRef.current = null;
         return;
       }
 
@@ -1666,6 +1726,8 @@ export function useDrawingEngine({
     zModifierRef.current = false;
     xModifierRef.current = false;
     cModifierRef.current = false;
+    isRotatingRef.current = false;
+    rotateStartRef.current = null;
     ctrlModifierRef.current = false;
     spaceModifierRef.current = false;
     spaceKeyDownTimeRef.current = 0;
