@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useStore } from "@/lib/animation/store";
+import { LOGO_INTRO_PNG } from "@/lib/assets/logos";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -87,7 +88,7 @@ export function ProjectManager() {
         {/* Header con logo grande */}
         <header className="mb-8 flex flex-col items-center text-center">
           <img
-            src="/logointro.png"
+            src={`data:image/png;base64,${LOGO_INTRO_PNG}`}
             alt="DIBUJEITOR PRO — Escuela Para Animadores de Rosario"
             className="max-w-2xl w-full h-auto mb-4 object-contain"
             style={{ maxHeight: "320px" }}

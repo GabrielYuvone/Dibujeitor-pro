@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useStore } from "@/lib/animation/store";
 import { usePlaybackEngine } from "@/lib/animation/useDrawingEngine";
+import { LOGO_INTRO_PNG } from "@/lib/assets/logos";
 import {
   Menubar,
   MenubarContent,
@@ -226,7 +227,7 @@ export function EditorView() {
       <Menubar className="rounded-none border-b border-border h-10 shrink-0">
         {/* Logo chiquito en el área de trabajo */}
         <img
-          src="/logointro.png"
+          src={`data:image/png;base64,${LOGO_INTRO_PNG}`}
           alt=""
           className="h-7 w-auto ml-2 mr-1 object-contain opacity-80"
         />
