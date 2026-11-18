@@ -27,22 +27,20 @@ def main() -> None:
     png_b64 = read_b64(PNG_PATH)
     svg_b64 = read_b64(SVG_PATH)
 
-    # Wrap long lines so the file is diff-friendly (TS allows string concat).
-    def wrap(s: str, width: int = 76) -> str:
-        chunks = [s[i : i + width] for i in range(0, len(s), width)]
-        return "\n".join(f'    "{c}"' for c in chunks)
-
+    # Una sola línea por constante — la concatenación de string literals
+    # adyacentes ("a" "b" "c") NO funciona en Turbopack (solo toma el
+    # primero). Una línea larga de 178KB funciona sin problemas.
     content = f'''// AUTO-GENERADO por scripts/assets/gen_logo_base64.py
 // No editar a mano — correr el script para regenerar.
 //
 // Logos embebidos como base64 data URLs para que funcionen en el preview
 // online sin depender de /public siendo servido como static files.
+// Una sola línea por constante (Turbopack no concatena string literals
+// adyacentes — bug confirmado: solo toma el primero).
 
-export const LOGO_INTRO_PNG: string =
-{wrap(png_b64)};
+export const LOGO_INTRO_PNG: string = "{png_b64}";
 
-export const LOGO_SVG: string =
-{wrap(svg_b64)};
+export const LOGO_SVG: string = "{svg_b64}";
 '''
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
